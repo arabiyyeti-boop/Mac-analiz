@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1120"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="50%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <!-- Background with subtle border -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <rect x="8" y="8" width="496" height="496" rx="100" fill="none" stroke="#1e293b" stroke-width="4"/>
+
+  <!-- Field Geometry Lines (Mathematical Pitch Grid) -->
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#334155" stroke-width="3" stroke-dasharray="8 8" opacity="0.4"/>
+  <circle cx="256" cy="256" r="90" fill="none" stroke="url(#accent)" stroke-width="4" opacity="0.6"/>
+  <line x1="256" y1="64" x2="256" y2="448" stroke="#334155" stroke-width="3" opacity="0.3"/>
+  <line x1="64" y1="256" x2="448" y2="256" stroke="#334155" stroke-width="3" opacity="0.3"/>
+
+  <!-- Analytics Polygon / Pentagon (Mathematical Ensemble) -->
+  <polygon points="256,128 368,210 326,340 186,340 144,210" fill="url(#accent)" fill-opacity="0.18" stroke="url(#accent)" stroke-width="6"/>
+
+  <!-- Data Radar Points -->
+  <circle cx="256" cy="128" r="8" fill="#10b981"/>
+  <circle cx="368" cy="210" r="8" fill="#06b6d4"/>
+  <circle cx="326" cy="340" r="8" fill="#3b82f6"/>
+  <circle cx="186" cy="340" r="8" fill="#6366f1"/>
+  <circle cx="144" cy="210" r="8" fill="#10b981"/>
+
+  <!-- Central Football Geometry Symbol -->
+  <circle cx="256" cy="256" r="32" fill="#0f172a" stroke="#f8fafc" stroke-width="4"/>
+  <polygon points="256,236 274,248 267,268 245,268 238,248" fill="#f8fafc"/>
+
+  <!-- Pulse Bars / Trend Indicator -->
+  <rect x="180" y="380" width="16" height="40" rx="4" fill="#334155"/>
+  <rect x="208" y="360" width="16" height="60" rx="4" fill="#0ea5e9"/>
+  <rect x="236" y="340" width="16" height="80" rx="4" fill="#10b981"/>
+  <rect x="264" y="350" width="16" height="70" rx="4" fill="url(#gold)"/>
+  <rect x="292" y="370" width="16" height="50" rx="4" fill="#3b82f6"/>
+  <rect x="320" y="390" width="16" height="30" rx="4" fill="#334155"/>
+</svg>

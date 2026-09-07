@@ -1,0 +1,6 @@
+{
+  "name": "MAÇ ANALİZ PRO",
+  "description": "Yüksek hassasiyetli istatistiksel futbol analiz motoru, ensemble modelleri, calibration, abstention ve prediction ledger sistemi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
