@@ -42,6 +42,7 @@ export interface CanonicalMatch {
   venue?: string;
   matchday?: number;
   score?: CanonicalScore;
+  odds?: CanonicalOdds;
 }
 
 export interface CanonicalStats {
@@ -69,7 +70,10 @@ export interface CanonicalStanding {
   form?: string; // e.g. "WWDLW"
 }
 
+export type H2HStatus = 'AVAILABLE' | 'MISSING' | 'LOW_CONFIDENCE' | 'CONFLICTING';
+
 export interface CanonicalH2H {
+  status?: H2HStatus;
   matchesCount: number;
   homeWins: number;
   draws: number;
@@ -83,6 +87,10 @@ export interface CanonicalH2H {
     homeScore: number;
     awayScore: number;
   }>;
+  source?: string;
+  retrievedAt?: string;
+  confidence?: number;
+  dataQuality?: number;
 }
 
 export interface CanonicalForm {
@@ -316,10 +324,16 @@ export interface AIExplanation {
   factorsAgainst: string[];
   generatedAt: string;
   disclaimer: string;
+  aiModel?: string;
+  aiPromptVersion?: string;
+  aiSchemaVersion?: string;
+  factCheckPassed?: boolean;
+  fallbackUsed?: boolean;
 }
 
 export interface MatchAnalysis {
   match: CanonicalMatch;
+  h2h?: CanonicalH2H;
   dataQuality: DataQualityReport;
   provenance: DataProvenance;
   models: {
@@ -377,6 +391,20 @@ export interface PredictionRecord {
   calibrationVersion: string;
   createdAt: string;
   matchStartTime: string;
+  oddsSnapshotId?: string;
+  oddsMarketSnapshot?: {
+    opening?: number;
+    current?: number;
+    source?: string;
+    overround?: number;
+  };
+  probabilityEdge?: number;
+  lookAheadBiasVerified?: boolean;
+  squadSnapshotId?: string;
+  marketRegime?: string;
+  closingOdds?: number;
+  clvPercent?: number;
+  recordVersion?: string;
   actualOutcome?: {
     fullTimeScore: { home: number; away: number };
     outcomeWon: boolean;
@@ -440,3 +468,6 @@ export interface ApiResponse<T> {
     provider: string;
   };
 }
+
+export * from './odds';
+export * from './advanced';

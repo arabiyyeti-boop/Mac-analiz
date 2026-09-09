@@ -1,5 +1,6 @@
 // src/api/validation/DataValidator.ts - Multi-tier Validation System
 import { CanonicalMatch, CanonicalStats, CanonicalH2H, DataQualityReport } from '@/types';
+import { CanonicalEntityManager } from '../../entity/CanonicalEntityManager';
 
 export interface ValidationIssue {
   level: 'SCHEMA' | 'SEMANTIC' | 'CROSS_SOURCE';
@@ -132,14 +133,23 @@ export class DataValidator {
       });
     }
 
-    // Check team name consistency
-    const cleanHomeA = sourceA.homeTeam.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const cleanHomeB = sourceB.homeTeam.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!cleanHomeA.includes(cleanHomeB) && !cleanHomeB.includes(cleanHomeA)) {
+    // Check team name consistency deterministically via CanonicalEntityManager
+    const em = CanonicalEntityManager.getInstance();
+    const resHomeA = em.resolveTeam({ name: sourceA.homeTeam.name, country: sourceA.league?.country });
+    const resHomeB = em.resolveTeam({ name: sourceB.homeTeam.name, country: sourceB.league?.country });
+
+    if (resHomeA.team && resHomeB.team && resHomeA.team.canonicalTeamId !== resHomeB.team.canonicalTeamId) {
       issues.push({
         level: 'CROSS_SOURCE',
         field: 'homeTeam',
-        message: `Potential entity resolution mismatch for home team: "${sourceA.homeTeam.name}" vs "${sourceB.homeTeam.name}".`,
+        message: `Entity resolution conflict for home team: "${sourceA.homeTeam.name}" (${resHomeA.team.canonicalTeamId}) vs "${sourceB.homeTeam.name}" (${resHomeB.team.canonicalTeamId}).`,
+        fatal: true,
+      });
+    } else if (!resHomeA.team || !resHomeB.team || resHomeA.confidence < 0.65 || resHomeB.confidence < 0.65) {
+      issues.push({
+        level: 'CROSS_SOURCE',
+        field: 'homeTeam',
+        message: `Ambiguous entity resolution for home team: "${sourceA.homeTeam.name}" vs "${sourceB.homeTeam.name}".`,
         fatal: false,
       });
     }
@@ -191,13 +201,26 @@ export class DataValidator {
 
     // Factor 3: H2H Coverage (max 15 points)
     const h2hCount = params.h2h?.matchesCount ?? 0;
+    const h2hStatus = params.h2h?.status;
     let h2hCoverage = 0;
-    if (h2hCount >= 5) h2hCoverage = 15;
-    else if (h2hCount >= 2) h2hCoverage = 10;
-    else if (h2hCount === 1) h2hCoverage = 5;
-    else {
-      h2hCoverage = 2;
-      warnings.push('H2H (ikili mücadele) geçmişi bulunamadı veya çok kısıtlı.');
+
+    if (h2hStatus === 'CONFLICTING') {
+      h2hCoverage = 3;
+      warnings.push('Farklı veri kaynakları arasında H2H çelişkisi tespit edildi.');
+    } else if (h2hStatus === 'LOW_CONFIDENCE') {
+      h2hCoverage = 4;
+      warnings.push('H2H verisi düşük güvenilirlikli (takım eşleşmesi veya veri kalitesi şüpheli).');
+    } else if (h2hStatus === 'MISSING' || !params.h2h || h2hCount === 0) {
+      h2hCoverage = 0;
+      warnings.push('Bu karşılaşma için doğrulanmış H2H verisi mevcut değil.');
+    } else if (h2hCount >= 5) {
+      h2hCoverage = 15;
+    } else if (h2hCount >= 2) {
+      h2hCoverage = 10;
+      warnings.push(`H2H örneklemi kısıtlı (${h2hCount} maç).`);
+    } else if (h2hCount === 1) {
+      h2hCoverage = 5;
+      warnings.push('H2H örneklemi çok kısıtlı (yalnızca 1 maç).');
     }
 
     // Factor 4: League Baseline Coverage (max 15 points)

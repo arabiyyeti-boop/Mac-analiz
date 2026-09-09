@@ -4,8 +4,10 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { ApiOrchestrator } from './src/api/orchestrator/ApiOrchestrator';
+import { NesineOddsProvider } from './src/api/providers/NesineOddsProvider';
 import { MatchAnalysisEngine } from './src/analysis/engine';
 import { AIExplanationService } from './src/ai/gemini';
+import { canonicalEntityManager } from './src/entity/CanonicalEntityManager';
 import { APP_VERSION } from './src/config/analysisConfig';
 import { ApiResponse } from './src/types';
 
@@ -124,12 +126,70 @@ async function startServer() {
       }
 
       const matchData = await orchestrator.getMatchDetails(matchId);
+      const targetMatch = matchData.details.match;
+
+      // Section 86 & Gates: Retrieve odds data server-side and pass to FinalConsistencyCheck
+      let verifiedOddsData: any = undefined;
+      try {
+        const nesine = NesineOddsProvider.getInstance();
+        verifiedOddsData = await nesine.getOddsForMatch(
+          matchId,
+          targetMatch.homeTeam.name,
+          targetMatch.awayTeam.name
+        );
+      } catch (err) {
+        // If external provider is unreachable, proceed to consistency check with undefined or existing match odds
+      }
+
+      // Strict Final Consistency Check: verifies teams, fixture, stale odds, invalid odds before analysis
+      const consistency = canonicalEntityManager.runFinalConsistencyCheck(
+        targetMatch,
+        matchData.details.h2h,
+        verifiedOddsData
+      );
+
+      if (!consistency.analysisPermitted) {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: 'ANALYSIS_BLOCKED',
+            message: `Veri ve kimlik bütünlüğü gerekçesiyle analiz engellendi: ${consistency.blockingReasons.join(' | ')}`,
+            retryable: false,
+          },
+          requestId,
+        });
+        return;
+      }
+
+      // Attach verified odds to target match so analysis engine runs on verified odds
+      if (verifiedOddsData && verifiedOddsData.status === 'CONNECTED' && consistency.oddsBindingValid) {
+        const msMarket = verifiedOddsData.markets.find((m: any) => m.marketType === '1X2' || m.marketType === 'MS' || m.marketName === 'Maç Sonucu');
+        if (msMarket) {
+          const o1 = msMarket.outcomes.find((o: any) => o.name === '1' || o.outcomeName === '1')?.odd ?? msMarket.outcomes.find((o: any) => o.name === '1' || o.outcomeName === '1')?.odds;
+          const oX = msMarket.outcomes.find((o: any) => o.name === 'X' || o.outcomeName === 'X')?.odd ?? msMarket.outcomes.find((o: any) => o.name === 'X' || o.outcomeName === 'X')?.odds;
+          const o2 = msMarket.outcomes.find((o: any) => o.name === '2' || o.outcomeName === '2')?.odd ?? msMarket.outcomes.find((o: any) => o.name === '2' || o.outcomeName === '2')?.odds;
+          if (o1 && oX && o2 && o1 > 1.01 && oX > 1.01 && o2 > 1.01) {
+            targetMatch.odds = {
+              homeWin: o1,
+              draw: oX,
+              awayWin: o2,
+              bookmaker: 'Nesine',
+              retrievedAt: verifiedOddsData.retrievedAt || new Date().toISOString(),
+            };
+          }
+        }
+      }
+
       const analysis = MatchAnalysisEngine.run({
-        match: matchData.details.match,
+        match: targetMatch,
         h2h: matchData.details.h2h,
         standing: matchData.details.standing,
         stats: matchData.details.stats,
       });
+
+      if (!analysis.h2h && matchData.details.h2h) {
+        analysis.h2h = matchData.details.h2h;
+      }
 
       res.json({
         success: true,
@@ -179,6 +239,87 @@ async function startServer() {
         error: {
           code: 'AI_EXPLANATION_FAILED',
           message: 'AI açıklaması üretilemedi.',
+          retryable: true,
+        },
+        requestId,
+      });
+    }
+  });
+
+  // 6. Nesine Status & Diagnostics
+  app.get('/api/nesine/status', (req: Request, res: Response) => {
+    const nesine = NesineOddsProvider.getInstance();
+    const status = nesine.getStatus();
+    res.json({
+      success: true,
+      data: status,
+      requestId: `req_${Date.now()}_nesine_status`,
+    });
+  });
+
+  // 7. Nesine Live Bulletin
+  app.get('/api/nesine/bulletin', async (req: Request, res: Response) => {
+    const requestId = `req_${Date.now()}_nesine_bulletin`;
+    try {
+      const nesine = NesineOddsProvider.getInstance();
+      const events = await nesine.fetchBulletin();
+      res.json({
+        success: true,
+        data: events.slice(0, 100), // Return top active football events
+        meta: {
+          count: events.length,
+          source: 'Nesine.com',
+          retrievedAt: new Date().toISOString(),
+        },
+        requestId,
+      });
+    } catch (err: any) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'NESINE_UNAVAILABLE',
+          message: err.message || 'Nesine bülteni alınamadı.',
+          retryable: true,
+        },
+        requestId,
+      });
+    }
+  });
+
+  // 8. Nesine Match Odds Query
+  app.get('/api/nesine/odds', async (req: Request, res: Response) => {
+    const matchId = (req.query.matchId as string) || `m_${Date.now()}`;
+    const homeTeam = req.query.home as string;
+    const awayTeam = req.query.away as string;
+    const requestId = `req_${Date.now()}_odds`;
+
+    if (!homeTeam || !awayTeam) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'MISSING_PARAMS',
+          message: 'Ev sahibi (home) ve deplasman (away) takım isimleri gereklidir.',
+          retryable: false,
+        },
+        requestId,
+      });
+      return;
+    }
+
+    try {
+      const nesine = NesineOddsProvider.getInstance();
+      const oddsData = await nesine.getOddsForMatch(matchId, homeTeam, awayTeam);
+      res.json({
+        success: true,
+        data: oddsData,
+        requestId,
+      });
+    } catch (err: any) {
+      res.status(503).json({
+        success: false,
+        error: {
+          code: 'NESINE_UNAVAILABLE',
+          message: err.message || 'Nesine oranlarına erişilemedi.',
           retryable: true,
         },
         requestId,

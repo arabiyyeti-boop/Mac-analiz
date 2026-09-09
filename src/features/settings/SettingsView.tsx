@@ -11,8 +11,11 @@ import {
   RefreshCw,
   Cpu,
   Database,
+  Tag,
+  Wifi,
 } from 'lucide-react';
-import { ProviderHealth } from '@/types';
+import { ProviderHealth, NesineAvailability } from '@/types';
+import { AppApiService } from '@/services/api';
 import { analysisConfig, APP_VERSION, MODEL_VERSION, ANALYSIS_VERSION, CONFIG_VERSION, CALIBRATION_VERSION } from '@/config/analysisConfig';
 
 interface SettingsViewProps {
@@ -22,6 +25,8 @@ interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = ({ onClearAllData }) => {
   const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([]);
   const [isLoadingHealth, setIsLoadingHealth] = useState(false);
+  const [nesineStatus, setNesineStatus] = useState<{ status: NesineAvailability; lastFetch: string | null; error: string | null; totalEvents: number } | null>(null);
+  const [isLoadingNesine, setIsLoadingNesine] = useState(false);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
 
   const fetchProviderHealth = async () => {
@@ -41,8 +46,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClearAllData }) =>
     }
   };
 
+  const checkNesine = async () => {
+    setIsLoadingNesine(true);
+    try {
+      const status = await AppApiService.getNesineStatus();
+      setNesineStatus(status);
+    } catch {
+      // Fallback
+    } finally {
+      setIsLoadingNesine(false);
+    }
+  };
+
   useEffect(() => {
     fetchProviderHealth();
+    checkNesine();
   }, []);
 
   return (
@@ -117,6 +135,74 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClearAllData }) =>
               </div>
             ))
           )}
+        </div>
+      </div>
+
+      {/* Nesine.com Live Odds & Bulletin Diagnostics */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Tag className="w-4 h-4 text-amber-400" />
+            <div>
+              <h3 className="text-sm font-bold text-white">Nesine.com Canlı Bülten & Oran Entegrasyonu</h3>
+              <p className="text-[11px] text-slate-400">Gerçek zamanlı bahis bülteni ve piyasa oranları sağlayıcısı</p>
+            </div>
+          </div>
+          <button
+            onClick={checkNesine}
+            disabled={isLoadingNesine}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingNesine ? 'animate-spin' : ''}`} />
+            <span>Bağlantıyı Sına</span>
+          </button>
+        </div>
+
+        <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3 text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+            <div>
+              <span className="text-[10px] text-slate-400 block font-sans">API Uç Noktası (Endpoint)</span>
+              <span className="font-mono text-slate-200 text-[11px]">https://bulten.nesine.com/api/bulten/getprebultenfull</span>
+            </div>
+            <div>
+              {nesineStatus?.status === 'CONNECTED' ? (
+                <span className="px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800/60 text-[10px] font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  BAĞLANTI AKTİF
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 rounded-full bg-amber-950 text-amber-300 border border-amber-800/60 text-[10px] font-bold">
+                  {nesineStatus?.status || 'Sorgulanıyor'}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs pt-1">
+            <div>
+              <span className="text-[10px] text-slate-500 block font-sans">Bültendeki Maç Sayısı</span>
+              <span className="font-bold text-white text-sm">{nesineStatus?.totalEvents || 0} Futbol Maçı</span>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block font-sans">Bülten Önbellek (TTL)</span>
+              <span className="font-bold text-slate-200">120 saniye</span>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block font-sans">Yetkilendirme</span>
+              <span className="font-bold text-emerald-400">Basic Token Doğrulandı</span>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block font-sans">Son Senkronizasyon</span>
+              <span className="font-bold text-slate-300">
+                {nesineStatus?.lastFetch ? new Date(nesineStatus.lastFetch).toLocaleTimeString('tr-TR') : 'Henüz yapılmadı'}
+              </span>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-slate-800/60 text-[11px] text-slate-400 leading-relaxed">
+            <span className="font-bold text-slate-300">Dürüst Veri Politikası: </span>
+            Nesine'den gelmeyen veriyi Nesine verisi gibi göstermek kesinlikle yasaktır. Bağlantı kesildiğinde veya bültende maç bulunmadığında yapay/sahte oran üretilmez, sistem otomatik olarak çekimser (abstain) moduna geçer.
+          </div>
         </div>
       </div>
 

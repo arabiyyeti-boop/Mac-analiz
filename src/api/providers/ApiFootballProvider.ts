@@ -173,13 +173,17 @@ export class ApiFootballProvider implements FootballDataProvider {
 
     return {
       data: {
+        status: list.length > 0 ? 'AVAILABLE' : 'MISSING',
         matchesCount: list.length,
         homeWins,
         draws,
         awayWins,
         totalGoals,
-        avgGoals: list.length > 0 ? Number((totalGoals / list.length).toFixed(2)) : 2.5,
+        avgGoals: list.length > 0 ? Number((totalGoals / list.length).toFixed(2)) : 0,
         recentMatches,
+        source: this.name,
+        retrievedAt: new Date().toISOString(),
+        confidence: list.length > 0 ? 1.0 : 0,
       },
       provenance: {
         provider: this.name,

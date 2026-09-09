@@ -1,7 +1,8 @@
 // src/features/matches/MatchesView.tsx - Fixtures & Match Selector
 import React, { useState } from 'react';
-import { Search, Calendar as CalendarIcon, Star, ChevronRight, Clock, Shield } from 'lucide-react';
+import { Search, Calendar as CalendarIcon, Star, ChevronRight, Clock, Shield, Tag } from 'lucide-react';
 import { CanonicalMatch } from '@/types';
+import { TeamLogo } from '@/components/TeamLogo';
 
 interface MatchesViewProps {
   matches: CanonicalMatch[];
@@ -169,11 +170,7 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
                   {/* Teams & Score */}
                   <div className="grid grid-cols-5 items-center gap-2">
                     <div className="col-span-2 flex items-center gap-2 min-w-0">
-                      {match.homeTeam.crest ? (
-                        <img src={match.homeTeam.crest} alt="" className="w-5 h-5 object-contain shrink-0" />
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">H</div>
-                      )}
+                      <TeamLogo teamName={match.homeTeam.name} crestUrl={match.homeTeam.crest} size="sm" />
                       <span className="font-bold text-sm text-white truncate">{match.homeTeam.name}</span>
                     </div>
 
@@ -189,12 +186,30 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
 
                     <div className="col-span-2 flex items-center justify-end gap-2 min-w-0">
                       <span className="font-bold text-sm text-white truncate text-right">{match.awayTeam.name}</span>
-                      {match.awayTeam.crest ? (
-                        <img src={match.awayTeam.crest} alt="" className="w-5 h-5 object-contain shrink-0" />
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">A</div>
-                      )}
+                      <TeamLogo teamName={match.awayTeam.name} crestUrl={match.awayTeam.crest} size="sm" />
                     </div>
+                  </div>
+
+                  {/* Nesine Oranları (1, X, 2) or VERİ MEVCUT DEĞİL - Item 131 */}
+                  <div className="flex items-center gap-2 mt-2.5 pt-2 border-t border-slate-800/60">
+                    <span className="text-[10px] font-semibold text-slate-400">Nesine:</span>
+                    {match.odds && match.odds.homeWin && match.odds.draw && match.odds.awayWin ? (
+                      <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700/60">
+                          1: <span className="text-amber-400">{match.odds.homeWin.toFixed(2)}</span>
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700/60">
+                          X: <span className="text-amber-400">{match.odds.draw.toFixed(2)}</span>
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700/60">
+                          2: <span className="text-amber-400">{match.odds.awayWin.toFixed(2)}</span>
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/50">
+                        VERİ MEVCUT DEĞİL
+                      </span>
+                    )}
                   </div>
                 </div>
 

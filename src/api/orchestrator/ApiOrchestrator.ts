@@ -2,9 +2,11 @@
 import { FootballDataProvider, ProviderFixtureQuery, ProviderResult } from '../providers/FootballDataProvider';
 import { FootballDataOrgProvider } from '../providers/FootballDataOrgProvider';
 import { ApiFootballProvider } from '../providers/ApiFootballProvider';
+import { NesineMatchProvider } from '../providers/NesineMatchProvider';
 import { DataValidator } from '../validation/DataValidator';
 import { CanonicalMatch, CanonicalForm, CanonicalH2H, CanonicalStanding, CanonicalStats, ProviderHealth } from '@/types';
 import { analysisConfig } from '@/config/analysisConfig';
+import { CanonicalEntityManager } from '@/entity/CanonicalEntityManager';
 
 interface CacheEntry<T> {
   data: T;
@@ -34,6 +36,7 @@ export class ApiOrchestrator {
     this.providers = [
       new FootballDataOrgProvider(),
       new ApiFootballProvider(),
+      new NesineMatchProvider(),
     ];
 
     // Initialize circuits
@@ -174,10 +177,42 @@ export class ApiOrchestrator {
       return this.inFlightRequests.get(key)!;
     }
 
-    const execPromise = this.executeWithResilience<any>(key, async (provider) => {
-      const res = await provider.getMatchDetails(matchId);
-      return { data: res.data, latencyMs: res.provenance.latencyMs };
-    }, analysisConfig.cache.matchDetailsTtlMs);
+    const execPromise = (async () => {
+      let result: { data: any; cached: boolean; provider: string; retrievedAt: string };
+      if (matchId.startsWith('nesine_')) {
+        const nesineProv = this.providers.find((p) => p.name === 'nesine') || this.providers[2];
+        const res = await nesineProv.getMatchDetails(matchId);
+        result = {
+          data: res.data,
+          cached: false,
+          provider: nesineProv.name,
+          retrievedAt: new Date().toISOString(),
+        };
+      } else {
+        result = await this.executeWithResilience<any>(
+          key,
+          async (provider) => {
+            const res = await provider.getMatchDetails(matchId);
+            return { data: res.data, latencyMs: res.provenance.latencyMs };
+          },
+          analysisConfig.cache.matchDetailsTtlMs
+        );
+      }
+
+      if (result.data?.match) {
+        result.data.h2h = await this.resolveAndVerifyH2H(result.data.match, result.data.h2h);
+      }
+
+      // Store in details cache
+      this.cache.set(key, {
+        data: result.data,
+        timestamp: Date.now(),
+        ttlMs: analysisConfig.cache.matchDetailsTtlMs,
+        provider: result.provider,
+      });
+
+      return result;
+    })();
 
     this.inFlightRequests.set(key, execPromise);
     try {
@@ -190,6 +225,136 @@ export class ApiOrchestrator {
       };
     } finally {
       this.inFlightRequests.delete(key);
+    }
+  }
+
+  /**
+   * Enriched H2H Resolution & Verification with Canonical Matching and Deterministic Caching
+   */
+  private async resolveAndVerifyH2H(
+    targetMatch: CanonicalMatch,
+    existingH2h?: CanonicalH2H
+  ): Promise<CanonicalH2H> {
+    const cem = CanonicalEntityManager.getInstance();
+    const homeRes = cem.resolveTeam({ name: targetMatch.homeTeam.name });
+    const awayRes = cem.resolveTeam({ name: targetMatch.awayTeam.name });
+
+    const homeCanonicalId = homeRes.team?.canonicalTeamId || targetMatch.homeTeam.name.toLowerCase().trim();
+    const awayCanonicalId = awayRes.team?.canonicalTeamId || targetMatch.awayTeam.name.toLowerCase().trim();
+
+    // 7. Cache/Dedupe: Canonical iki takım ID’sinden, home/away sırasından bağımsız deterministik H2H cache anahtarı
+    const teamIds = [homeCanonicalId, awayCanonicalId].sort();
+    const h2hCacheKey = `h2h_${teamIds[0]}_${teamIds[1]}`;
+
+    const cachedH2h = this.cache.get(h2hCacheKey);
+    if (cachedH2h && Date.now() - cachedH2h.timestamp < cachedH2h.ttlMs) {
+      return cachedH2h.data;
+    }
+
+    // In-flight deduplication: return existing pending promise for this pair
+    if (this.inFlightRequests.has(h2hCacheKey)) {
+      return this.inFlightRequests.get(h2hCacheKey);
+    }
+
+    const h2hPromise = (async (): Promise<CanonicalH2H> => {
+      // Default missing structure
+      const createMissingH2H = (source = 'none'): CanonicalH2H => ({
+        status: 'MISSING',
+        matchesCount: 0,
+        homeWins: 0,
+        draws: 0,
+        awayWins: 0,
+        totalGoals: 0,
+        avgGoals: 0,
+        recentMatches: [],
+        source,
+        retrievedAt: new Date().toISOString(),
+        confidence: 0,
+      });
+
+      let resolvedH2h: CanonicalH2H = existingH2h || createMissingH2H();
+
+      // Check if team resolution is ambiguous
+      const isAmbiguous =
+        !homeRes.team ||
+        !awayRes.team ||
+        homeRes.confidence < 0.6 ||
+        awayRes.confidence < 0.6 ||
+        homeRes.reason?.includes('ENTITY_AMBIGUOUS') ||
+        awayRes.reason?.includes('ENTITY_AMBIGUOUS');
+
+      // 1. ApiOrchestrator: Nesine maçı için, yalnızca gerçek ve configured bir H2H provider varsa H2H sorgula.
+      // API-Football aktif değilse hiçbir sahte istek yapma; H2H MISSING kalsın.
+      const realH2hProviders = this.providers.filter((p) => p.name !== 'nesine' && p.isConfigured());
+
+      if (realH2hProviders.length > 0 && !isAmbiguous && (!existingH2h || existingH2h.status === 'MISSING')) {
+        const providerResults: { providerName: string; h2h: CanonicalH2H }[] = [];
+
+        for (const prov of realH2hProviders) {
+          try {
+            const homeSourceId = homeRes.team?.sourceTeamIds.find((s) => s.provider === prov.name)?.sourceId ||
+              (homeRes.team?.sourceTeamIds.find((s) => s.provider === prov.name) as any)?.sourceTeamId;
+            const awaySourceId = awayRes.team?.sourceTeamIds.find((s) => s.provider === prov.name)?.sourceId ||
+              (awayRes.team?.sourceTeamIds.find((s) => s.provider === prov.name) as any)?.sourceTeamId;
+
+            if (homeSourceId && awaySourceId) {
+              const provRes = await prov.getH2H(homeSourceId, awaySourceId);
+              if (provRes.data && provRes.data.status !== 'MISSING' && provRes.data.recentMatches.length > 0) {
+                providerResults.push({ providerName: prov.name, h2h: provRes.data });
+              }
+            }
+          } catch {
+            // Gracefully skip failed provider
+          }
+        }
+
+        // 8. Cross-source conflict:
+        // Birden fazla gerçek H2H provider aktif olduğunda çözülemeyen skor/tarih/takım çelişkisini CONFLICTING olarak işaretle.
+        // Tek provider durumunda gereksiz conflict üretme.
+        if (providerResults.length > 1) {
+          const [first, second] = providerResults;
+          const matchesCountDiff = Math.abs(first.h2h.matchesCount - second.h2h.matchesCount);
+          const homeWinsDiff = Math.abs(first.h2h.homeWins - second.h2h.homeWins);
+          const awayWinsDiff = Math.abs(first.h2h.awayWins - second.h2h.awayWins);
+
+          const hasConflict = matchesCountDiff > 2 || homeWinsDiff > 2 || awayWinsDiff > 2;
+
+          resolvedH2h = first.h2h;
+          if (hasConflict) {
+            resolvedH2h.status = 'CONFLICTING';
+            resolvedH2h.confidence = 0.4;
+          }
+        } else if (providerResults.length === 1) {
+          resolvedH2h = providerResults[0].h2h;
+        }
+      }
+
+      // 2. H2H: Mevcut CanonicalEntityManager.verifyH2HBinding() kullanılsın.
+      // Home/away reversal kabul edilsin, üçüncü takım kayıtları reddedilsin, belirsiz eşleşmeler reddedilsin.
+      if (resolvedH2h && resolvedH2h.status !== 'MISSING' && resolvedH2h.recentMatches && resolvedH2h.recentMatches.length > 0) {
+        const verification = cem.verifyH2HBinding(targetMatch, resolvedH2h);
+        if (!verification.isValid) {
+          resolvedH2h.status = 'LOW_CONFIDENCE';
+          resolvedH2h.confidence = 0.3;
+        }
+      }
+
+      // Store in cache (Requirement 7)
+      this.cache.set(h2hCacheKey, {
+        data: resolvedH2h,
+        timestamp: Date.now(),
+        ttlMs: analysisConfig.cache.matchDetailsTtlMs,
+        provider: resolvedH2h.source || 'orchestrator',
+      });
+
+      return resolvedH2h;
+    })();
+
+    this.inFlightRequests.set(h2hCacheKey, h2hPromise);
+    try {
+      return await h2hPromise;
+    } finally {
+      this.inFlightRequests.delete(h2hCacheKey);
     }
   }
 

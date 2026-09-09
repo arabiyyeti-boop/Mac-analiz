@@ -4,6 +4,9 @@ import { MatchAnalysis, AIExplanation } from '@/types';
 
 export class AIExplanationService {
   private static client: GoogleGenAI | null = null;
+  public static readonly AI_MODEL = 'gemini-3.8-flash';
+  public static readonly AI_PROMPT_VERSION = '2.4.0';
+  public static readonly AI_SCHEMA_VERSION = '1.2.0';
 
   private static getClient(): GoogleGenAI | null {
     if (!AIExplanationService.client && process.env.GEMINI_API_KEY) {
@@ -17,6 +20,46 @@ export class AIExplanationService {
       });
     }
     return AIExplanationService.client;
+  }
+
+  /**
+   * 174. AI FACT CHECK LAYER
+   * Validates generated AI text against deterministic analysis facts
+   */
+  public static factCheckAIOutput(
+    parsed: { summary: string; tacticalContext: string; riskAssessment?: string },
+    analysis: MatchAnalysis
+  ): { passed: boolean; discrepancies: string[] } {
+    const discrepancies: string[] = [];
+    const fullText = `${parsed.summary} ${parsed.tacticalContext} ${parsed.riskAssessment || ''}`.toLowerCase();
+
+    // 1. Forbidden promise words
+    const forbiddenWords = ['garanti', 'kesin', '%100', 'yüzde yüz', 'banko', 'risksiz', 'şüphesiz kazanır'];
+    for (const word of forbiddenWords) {
+      if (fullText.includes(word)) {
+        discrepancies.push(`Yasaklı kesinlik ifadesi saptandı: "${word}"`);
+      }
+    }
+
+    // 2. Discrepancy check: Verify primary probability consistency if mentioned
+    if (analysis.primarySignal) {
+      const probPercent = Math.round(analysis.primarySignal.modelProbability * 100);
+      const matches = fullText.match(/%\s?(\d{1,3})/g);
+      if (matches) {
+        for (const m of matches) {
+          const num = parseInt(m.replace(/[^\d]/g, ''), 10);
+          if (num > 0 && num <= 100 && Math.abs(num - probPercent) > 25 && num !== Math.round(analysis.dataQuality.score)) {
+            // Significant ungrounded percentage discrepancy
+            discrepancies.push(`Analiz dışı olasılık oranı tespit edildi: %${num}`);
+          }
+        }
+      }
+    }
+
+    return {
+      passed: discrepancies.length === 0,
+      discrepancies,
+    };
   }
 
   /**
@@ -51,6 +94,11 @@ export class AIExplanationService {
       factorsAgainst: factorsAgainst.length > 0 ? factorsAgainst : ['Futbolda tek maç varyansı ve beklenmedik kart/sakatlık riskleri her zaman mevcuttur.'],
       generatedAt: new Date().toISOString(),
       disclaimer: 'Bu analiz tamamen matematiksel ve istatistiksel modellemelere dayanır. Asla kesin kazanç veya garanti anlamına gelmez.',
+      aiModel: 'Deterministic-Fallback-Engine',
+      aiPromptVersion: this.AI_PROMPT_VERSION,
+      aiSchemaVersion: this.AI_SCHEMA_VERSION,
+      factCheckPassed: true,
+      fallbackUsed: true,
     };
   }
 
@@ -134,12 +182,10 @@ KESİN KURALLAR:
         return this.generateFallbackExplanation(analysis);
       }
 
-      // Check for forbidden promise words in AI output
-      const forbiddenWords = ['garanti', 'kesin', '%100', 'yüzde yüz', 'banko', 'risksiz'];
-      const hasForbidden = forbiddenWords.some((w) =>
-        parsed.summary.toLowerCase().includes(w) || parsed.riskAssessment?.toLowerCase().includes(w)
-      );
-      if (hasForbidden) {
+      // 174. Run Deterministic AI Fact Check Layer
+      const factCheck = this.factCheckAIOutput(parsed, analysis);
+      if (!factCheck.passed) {
+        // Fallback to pure deterministic mathematical explanation if hallucination or forbidden phrasing detected
         return this.generateFallbackExplanation(analysis);
       }
 
@@ -152,6 +198,11 @@ KESİN KURALLAR:
         factorsAgainst: parsed.factorsAgainst.slice(0, 4),
         generatedAt: new Date().toISOString(),
         disclaimer: 'Model olasılıkları matematiksel simülasyon çıktısıdır. Futbol müsabakaları sonuç garantisi barındırmaz.',
+        aiModel: this.AI_MODEL,
+        aiPromptVersion: this.AI_PROMPT_VERSION,
+        aiSchemaVersion: this.AI_SCHEMA_VERSION,
+        factCheckPassed: true,
+        fallbackUsed: false,
       };
     } catch {
       // If Gemini call fails, return fallback mathematical explanation

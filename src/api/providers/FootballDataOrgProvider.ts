@@ -79,13 +79,15 @@ export class FootballDataOrgProvider implements FootballDataProvider {
     try {
       const { data: rawH2h } = await this.fetchWithAuth<any>(`/matches/${matchId}/head2head?limit=10`);
       if (rawH2h && rawH2h.aggregates) {
+        const matchesCount = rawH2h.aggregates.numberOfMatches || 0;
         h2h = {
-          matchesCount: rawH2h.aggregates.numberOfMatches || 0,
+          status: matchesCount > 0 ? 'AVAILABLE' : 'MISSING',
+          matchesCount,
           homeWins: rawH2h.aggregates.homeTeam?.wins || 0,
           draws: rawH2h.aggregates.homeTeam?.draws || 0,
           awayWins: rawH2h.aggregates.awayTeam?.wins || 0,
           totalGoals: rawH2h.aggregates.totalGoals || 0,
-          avgGoals: rawH2h.aggregates.numberOfMatches ? Number((rawH2h.aggregates.totalGoals / rawH2h.aggregates.numberOfMatches).toFixed(2)) : 2.5,
+          avgGoals: matchesCount ? Number((rawH2h.aggregates.totalGoals / matchesCount).toFixed(2)) : 0,
           recentMatches: (rawH2h.matches || []).map((m: any) => ({
             date: m.utcDate,
             homeTeam: m.homeTeam?.name || '',
@@ -93,6 +95,9 @@ export class FootballDataOrgProvider implements FootballDataProvider {
             homeScore: m.score?.fullTime?.home ?? 0,
             awayScore: m.score?.fullTime?.away ?? 0,
           })),
+          source: this.name,
+          retrievedAt: new Date().toISOString(),
+          confidence: matchesCount > 0 ? 1.0 : 0,
         };
       }
     } catch {
@@ -149,16 +154,20 @@ export class FootballDataOrgProvider implements FootballDataProvider {
   }
 
   async getH2H(homeTeamId: string | number, awayTeamId: string | number): Promise<ProviderResult<CanonicalH2H>> {
-    // football-data.org provides H2H via matchId, but if team IDs are given, fallback to mock/empty structure
+    // football-data.org provides H2H via matchId, but if team IDs are given, fallback to missing structure
     return {
       data: {
+        status: 'MISSING',
         matchesCount: 0,
         homeWins: 0,
         draws: 0,
         awayWins: 0,
         totalGoals: 0,
-        avgGoals: 2.5,
+        avgGoals: 0,
         recentMatches: [],
+        source: this.name,
+        retrievedAt: new Date().toISOString(),
+        confidence: 0,
       },
       provenance: {
         provider: this.name,

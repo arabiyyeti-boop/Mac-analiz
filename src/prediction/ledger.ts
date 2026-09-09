@@ -15,7 +15,23 @@ export class PredictionLedger {
   /**
    * Records a snapshot of an active prediction into the immutable ledger
    */
-  async recordPrediction(analysis: MatchAnalysis, signal: MarketSignal): Promise<PredictionRecord> {
+  async recordPrediction(
+    analysis: MatchAnalysis,
+    signal: MarketSignal,
+    oddsData?: {
+      snapshotId?: string;
+      opening?: number;
+      current?: number;
+      source?: string;
+      overround?: number;
+      probabilityEdge?: number;
+      squadSnapshotId?: string;
+      marketRegime?: string;
+      closingOdds?: number;
+      clvPercent?: number;
+      recordVersion?: string;
+    }
+  ): Promise<PredictionRecord> {
     const existing = await this.getAllRecords();
 
     // Check if this match and market is already recorded to prevent duplicate records
@@ -33,6 +49,9 @@ export class PredictionLedger {
     if (analysis.models.dixonColes) modelOutputs.dixonColes = analysis.models.dixonColes.pHome;
     if (analysis.models.elo) modelOutputs.elo = analysis.models.elo.pHome;
     if (analysis.models.form) modelOutputs.form = analysis.models.form.pHome;
+
+    const createdAt = new Date().toISOString();
+    const isPriorToKickoff = new Date(createdAt).getTime() <= new Date(analysis.match.utcDate).getTime();
 
     const record: PredictionRecord = {
       predictionId,
@@ -58,8 +77,24 @@ export class PredictionLedger {
       modelVersion: analysis.versions.modelVersion,
       configVersion: analysis.versions.configVersion,
       calibrationVersion: analysis.versions.calibrationVersion,
-      createdAt: new Date().toISOString(),
+      createdAt,
       matchStartTime: analysis.match.utcDate,
+      oddsSnapshotId: oddsData?.snapshotId,
+      oddsMarketSnapshot: oddsData
+        ? {
+            opening: oddsData.opening,
+            current: oddsData.current,
+            source: oddsData.source || 'Nesine',
+            overround: oddsData.overround,
+          }
+        : undefined,
+      probabilityEdge: oddsData?.probabilityEdge,
+      lookAheadBiasVerified: isPriorToKickoff,
+      squadSnapshotId: oddsData?.squadSnapshotId,
+      marketRegime: oddsData?.marketRegime,
+      closingOdds: oddsData?.closingOdds,
+      clvPercent: oddsData?.clvPercent,
+      recordVersion: oddsData?.recordVersion || 'v1',
     };
 
     existing.unshift(record);

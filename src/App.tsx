@@ -141,8 +141,24 @@ export default function App() {
   };
 
   // Record prediction to ledger
-  const handleRecordLedger = async (analysis: MatchAnalysis, signal: MarketSignal) => {
-    await predictionLedger.recordPrediction(analysis, signal);
+  const handleRecordLedger = async (
+    analysis: MatchAnalysis,
+    signal: MarketSignal,
+    oddsData?: {
+      snapshotId?: string;
+      opening?: number;
+      current?: number;
+      source?: string;
+      overround?: number;
+      probabilityEdge?: number;
+      squadSnapshotId?: string;
+      marketRegime?: string;
+      closingOdds?: number;
+      clvPercent?: number;
+      recordVersion?: string;
+    }
+  ) => {
+    await predictionLedger.recordPrediction(analysis, signal, oddsData);
   };
 
   // Clear all data

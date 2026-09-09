@@ -11,14 +11,37 @@ import {
   Cpu,
   RefreshCw,
   BookOpen,
+  Tag,
 } from 'lucide-react';
 import { MatchAnalysis, MarketSignal, AIExplanation, ModelAgreement } from '@/types';
+import { TeamLogo } from '@/components/TeamLogo';
+import { NesineOddsPanel } from './NesineOddsPanel';
+import { AdvancedIntelligencePanel } from './AdvancedIntelligencePanel';
+import { QualityAndConfidencePanel } from './QualityAndConfidencePanel';
+import { H2HStatusPanel } from './H2HStatusPanel';
+import { AdvancedIntelligenceEngine } from '@/analysis/advancedIntelligence';
 
 interface DeepAnalysisViewProps {
   analysis: MatchAnalysis | null;
   isLoading: boolean;
   onRefreshAnalysis: () => void;
-  onRecordLedger?: (analysis: MatchAnalysis, signal: MarketSignal) => void;
+  onRecordLedger?: (
+    analysis: MatchAnalysis,
+    signal: MarketSignal,
+    oddsData?: {
+      snapshotId?: string;
+      opening?: number;
+      current?: number;
+      source?: string;
+      overround?: number;
+      probabilityEdge?: number;
+      squadSnapshotId?: string;
+      marketRegime?: string;
+      closingOdds?: number;
+      clvPercent?: number;
+      recordVersion?: string;
+    }
+  ) => void;
   aiExplanation: AIExplanation | null;
   isLoadingAI: boolean;
   onRequestAIExplanation: () => void;
@@ -33,7 +56,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
   isLoadingAI,
   onRequestAIExplanation,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'MARKETS' | 'MODELS' | 'QUALITY' | 'AI'>('MARKETS');
+  const [activeSubTab, setActiveSubTab] = useState<'MARKETS' | 'ODDS' | 'MODELS' | 'ADVANCED' | 'QUALITY' | 'AI'>('MARKETS');
   const [recordedMap, setRecordedMap] = useState<Record<string, boolean>>({});
 
   if (isLoading) {
@@ -66,7 +89,12 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
     const key = `${match.id}_${sig.market}`;
     if (recordedMap[key]) return;
     if (onRecordLedger) {
-      onRecordLedger(analysis, sig);
+      const squadSnapshot = AdvancedIntelligenceEngine.createSquadSnapshot(match);
+      const marketRegime = AdvancedIntelligenceEngine.detectMarketRegime({ match });
+      onRecordLedger(analysis, sig, {
+        squadSnapshotId: squadSnapshot.snapshotId,
+        marketRegime: marketRegime.regime,
+      });
       setRecordedMap((prev) => ({ ...prev, [key]: true }));
     }
   };
@@ -85,11 +113,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
         {/* Teams Display */}
         <div className="grid grid-cols-5 items-center gap-3 py-2">
           <div className="col-span-2 flex items-center gap-2.5 min-w-0">
-            {match.homeTeam.crest ? (
-              <img src={match.homeTeam.crest} alt="" className="w-8 h-8 object-contain shrink-0" />
-            ) : (
-              <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-xs text-slate-300">H</div>
-            )}
+            <TeamLogo teamName={match.homeTeam.name} crestUrl={match.homeTeam.crest} size="md" />
             <div className="min-w-0">
               <h3 className="text-base font-extrabold text-white truncate">{match.homeTeam.name}</h3>
               <span className="text-[10px] text-slate-400 font-medium">Ev Sahibi</span>
@@ -111,11 +135,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
               <h3 className="text-base font-extrabold text-white truncate">{match.awayTeam.name}</h3>
               <span className="text-[10px] text-slate-400 font-medium">Deplasman</span>
             </div>
-            {match.awayTeam.crest ? (
-              <img src={match.awayTeam.crest} alt="" className="w-8 h-8 object-contain shrink-0" />
-            ) : (
-              <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-xs text-slate-300">A</div>
-            )}
+            <TeamLogo teamName={match.awayTeam.name} crestUrl={match.awayTeam.crest} size="md" />
           </div>
         </div>
 
@@ -168,6 +188,18 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
           Market Olasılıkları
         </button>
         <button
+          id="subtab-odds"
+          onClick={() => setActiveSubTab('ODDS')}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center justify-center gap-1.5 ${
+            activeSubTab === 'ODDS'
+              ? 'bg-amber-500 text-slate-950 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Tag className="w-3.5 h-3.5" />
+          <span>Nesine & Oranlar</span>
+        </button>
+        <button
           id="subtab-models"
           onClick={() => setActiveSubTab('MODELS')}
           className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
@@ -177,6 +209,18 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
           }`}
         >
           Modeller & Uzlaşı
+        </button>
+        <button
+          id="subtab-advanced"
+          onClick={() => setActiveSubTab('ADVANCED')}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center justify-center gap-1.5 ${
+            activeSubTab === 'ADVANCED'
+              ? 'bg-sky-500 text-slate-950 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Cpu className="w-3.5 h-3.5" />
+          <span>İleri Zeka & Rejim</span>
         </button>
         <button
           id="subtab-quality"
@@ -312,6 +356,13 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ---------------------------------------------------- */}
+      {/* TAB 1.5: NESINE LIVE ODDS, OVERROUND & MOVEMENTS */}
+      {/* ---------------------------------------------------- */}
+      {activeSubTab === 'ODDS' && (
+        <NesineOddsPanel analysis={analysis} />
       )}
 
       {/* ---------------------------------------------------- */}
@@ -464,7 +515,17 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
               </table>
             </div>
           </div>
+
+          {/* H2H Status & Head-to-Head History */}
+          <H2HStatusPanel h2h={analysis.h2h} match={analysis.match} />
         </div>
+      )}
+
+      {/* ---------------------------------------------------- */}
+      {/* TAB: ADVANCED INTELLIGENCE & MARKET REGIME */}
+      {/* ---------------------------------------------------- */}
+      {activeSubTab === 'ADVANCED' && (
+        <AdvancedIntelligencePanel analysis={analysis} />
       )}
 
       {/* ---------------------------------------------------- */}
@@ -472,70 +533,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
       {/* ---------------------------------------------------- */}
       {activeSubTab === 'QUALITY' && (
         <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h4 className="text-sm font-bold text-white">Veri Kalitesi Skoru (Data Quality Index)</h4>
-                <p className="text-xs text-slate-400 mt-0.5">Asgari analiz eşiği: 40/100, Sinyal üretme eşiği: 55/100</p>
-              </div>
-              <div className="text-2xl font-black font-mono text-emerald-400">{dataQuality.score}/100</div>
-            </div>
-
-            {/* Factors Breakdown */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs mb-4">
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">Örneklem Yeterliliği</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.sampleSufficiency} / 30 Puan
-                </span>
-              </div>
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">Veri Tazeliği</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.freshnessScore} / 20 Puan
-                </span>
-              </div>
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">H2H Kapsamı</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.h2hCoverage} / 15 Puan
-                </span>
-              </div>
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">Lig Bazı Kapsamı</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.leagueBaselineCoverage} / 15 Puan
-                </span>
-              </div>
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">Sağlayıcı Güvenilirliği</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.providerReliability} / 10 Puan
-                </span>
-              </div>
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-400 block text-[11px]">xG & Sakatlık Verisi</span>
-                <span className="text-sm font-bold text-white mt-1 block">
-                  {dataQuality.factors.xgAvailability + dataQuality.factors.injuryDataAvailability} / 10 Puan
-                </span>
-              </div>
-            </div>
-
-            {/* Warnings */}
-            {dataQuality.warnings.length > 0 && (
-              <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-800/40 text-xs text-amber-300">
-                <div className="font-bold flex items-center gap-1.5 mb-1.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-400" />
-                  <span>Veri Kalitesi Uyarıları</span>
-                </div>
-                <ul className="list-disc list-inside space-y-1 text-slate-300 text-[11px]">
-                  {dataQuality.warnings.map((w, idx) => (
-                    <li key={idx}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
+          <QualityAndConfidencePanel analysis={analysis} />
 
           {/* Uncertainty Audit */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">

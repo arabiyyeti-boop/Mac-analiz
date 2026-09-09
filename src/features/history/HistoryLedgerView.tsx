@@ -12,8 +12,11 @@ import {
   BarChart3,
   Sliders,
   Trash2,
+  Tag,
+  ShieldCheck,
 } from 'lucide-react';
 import { PredictionRecord, BacktestResult } from '@/types';
+import { TeamLogo } from '@/components/TeamLogo';
 import { predictionLedger } from '@/prediction/ledger';
 import { BacktestEngine } from '@/backtest/engine';
 
@@ -174,14 +177,39 @@ export const HistoryLedgerView: React.FC = () => {
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-slate-300">{rec.league}</span>
-                      <span className="text-xs text-slate-500">&bull;</span>
+                      <TeamLogo teamName={rec.homeTeam} size="xs" />
                       <span className="text-xs font-bold text-white">
                         {rec.homeTeam} vs {rec.awayTeam}
                       </span>
+                      <TeamLogo teamName={rec.awayTeam} size="xs" />
+                      <span className="text-xs text-slate-500">&bull;</span>
+                      <span className="text-[11px] text-slate-400">{rec.league}</span>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {rec.lookAheadBiasVerified && (
+                        <span
+                          className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/60 font-mono font-bold flex items-center gap-1"
+                          title="Gözlem maç başlangıç saatinden önce kaydedilmiştir"
+                        >
+                          <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>ZAMANSAL BÜTÜNLÜK</span>
+                        </span>
+                      )}
+
+                      {rec.oddsMarketSnapshot && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800/60 font-mono flex items-center gap-1">
+                          <Tag className="w-2.5 h-2.5 text-amber-400" />
+                          <span>{rec.oddsMarketSnapshot.source}: {rec.oddsMarketSnapshot.current?.toFixed(2)}</span>
+                        </span>
+                      )}
+
+                      {rec.marketRegime && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800/60 font-mono font-bold">
+                          {rec.marketRegime}
+                        </span>
+                      )}
+
                       <span className="text-[10px] font-mono text-slate-500">
                         {new Date(rec.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
                       </span>

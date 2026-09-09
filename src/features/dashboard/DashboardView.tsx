@@ -12,8 +12,10 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Tag,
 } from 'lucide-react';
 import { CanonicalMatch, MatchAnalysis, MarketSignal } from '@/types';
+import { TeamLogo } from '@/components/TeamLogo';
 
 interface DashboardViewProps {
   matches: CanonicalMatch[];
@@ -87,9 +89,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   };
 
+  const SCAN_STEPS = [
+    'Veriler alınıyor',
+    'Maçlar doğrulanıyor',
+    'Oranlar alınıyor',
+    'Takım kimlikleri eşleştiriliyor',
+    'İstatistikler hazırlanıyor',
+    'Modeller çalışıyor',
+    'Model agreement',
+    'Calibration',
+    'Risk filter',
+    'Final signals',
+  ];
+
   return (
     <div className="space-y-6 pb-20">
-      {/* Top Banner & Quick Scan */}
+      {/* Top Banner & Quick Stats */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -97,9 +112,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>Sert Risk Filtresi & Kalibrasyon Aktif</span>
             </div>
-            <h2 className="text-xl font-bold text-white tracking-tight">Günlük Bülten & Sinyal Taraması</h2>
+            <h2 className="text-xl font-bold text-white tracking-tight">MAÇ ANALİZ PRO &bull; Günlük Bülten Taraması</h2>
             <p className="text-xs text-slate-400 max-w-xl mt-1 leading-relaxed">
-              Poisson, Dixon-Coles, Elo, Form ve Lig modelleri ensemble olarak harmanlanır. Çelişkili veya yetersiz veriler otomatik elenir (Abstention).
+              Poisson, Dixon-Coles, Elo, Form ve Lig modelleri ensemble olarak harmanlanır. Nesine bülteni ve oran hareketleri doğrulanır.
             </p>
           </div>
 
@@ -110,9 +125,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 text-slate-950 disabled:text-slate-500 font-bold text-sm shadow-md transition-all active:scale-95 shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${isScanning ? 'animate-spin' : ''}`} />
-            <span>{isScanning ? 'Modeller Hesaplanıyor...' : 'GÜNÜ TARA'}</span>
+            <span>{isScanning ? 'GÜN TARIYOR...' : 'GÜNÜ TARA'}</span>
           </button>
         </div>
+
+        {/* 10-Step Scanning Progress Pipeline (Item 145) */}
+        {isScanning && (
+          <div className="mt-5 p-4 rounded-xl bg-slate-950/80 border border-emerald-500/30">
+            <div className="flex items-center gap-2 mb-3">
+              <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+              <span className="text-xs font-bold text-emerald-400 tracking-wide">
+                GÜNÜ TARA MODEL PIPELINE ÇALIŞIYOR (10 ADIM)
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {SCAN_STEPS.map((step, idx) => (
+                <div
+                  key={idx}
+                  className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center gap-2 text-[11px]"
+                >
+                  <span className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-[9px] font-bold flex items-center justify-center border border-emerald-500/40 shrink-0">
+                    {idx + 1}
+                  </span>
+                  <span className="text-slate-300 font-medium truncate">{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Metrics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-slate-800/80">
@@ -225,24 +265,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </div>
 
                   {/* Teams */}
-                  <div className="flex items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
-                      {match.homeTeam.crest ? (
-                        <img src={match.homeTeam.crest} alt="" className="w-5 h-5 object-contain shrink-0" />
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">H</div>
-                      )}
+                      <TeamLogo teamName={match.homeTeam.name} crestUrl={match.homeTeam.crest} size="sm" />
                       <span className="font-bold text-sm text-white truncate">{match.homeTeam.name}</span>
                     </div>
                     <span className="text-xs font-bold text-slate-500 shrink-0">vs</span>
                     <div className="flex items-center gap-2 min-w-0 justify-end">
                       <span className="font-bold text-sm text-white truncate text-right">{match.awayTeam.name}</span>
-                      {match.awayTeam.crest ? (
-                        <img src={match.awayTeam.crest} alt="" className="w-5 h-5 object-contain shrink-0" />
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">A</div>
-                      )}
+                      <TeamLogo teamName={match.awayTeam.name} crestUrl={match.awayTeam.crest} size="sm" />
                     </div>
+                  </div>
+
+                  {/* Nesine Oranları (1, X, 2) or VERİ MEVCUT DEĞİL - Item 131 */}
+                  <div className="flex items-center justify-between gap-2 mb-3 px-3 py-1.5 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                    <div className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+                      <Tag className="w-3 h-3 text-amber-400" />
+                      <span>Nesine Oranları:</span>
+                    </div>
+                    {match.odds && match.odds.homeWin && match.odds.draw && match.odds.awayWin ? (
+                      <div className="flex items-center gap-2 text-xs font-mono font-bold">
+                        <span className="text-slate-400">1: <span className="text-amber-400">{match.odds.homeWin.toFixed(2)}</span></span>
+                        <span className="text-slate-400">X: <span className="text-amber-400">{match.odds.draw.toFixed(2)}</span></span>
+                        <span className="text-slate-400">2: <span className="text-amber-400">{match.odds.awayWin.toFixed(2)}</span></span>
+                      </div>
+                    ) : (
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/50">
+                        VERİ MEVCUT DEĞİL
+                      </span>
+                    )}
                   </div>
 
                   {/* Signal Box */}

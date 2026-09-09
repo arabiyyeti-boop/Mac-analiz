@@ -23,6 +23,7 @@ import { AnomalyEngine } from './anomaly';
 import { CalibrationEngine } from './calibration';
 import { SignalEngine } from './signal';
 import { DataValidator } from '@/api/validation/DataValidator';
+import { CanonicalEntityManager } from '@/entity/CanonicalEntityManager';
 import {
   ANALYSIS_VERSION,
   MODEL_VERSION,
@@ -45,15 +46,25 @@ export interface AnalysisInputData {
 
 export class MatchAnalysisEngine {
   public static run(input: AnalysisInputData): MatchAnalysis {
-    const { match, homeForm, awayForm, h2h, standing, stats, odds } = input;
+    const { match, homeForm, awayForm, standing, stats, odds } = input;
+    let verifiedH2h = input.h2h;
 
-    // 1. Data Quality Evaluation
+    // 1. Verify H2H binding and status
+    if (verifiedH2h && verifiedH2h.status !== 'MISSING' && verifiedH2h.recentMatches && verifiedH2h.recentMatches.length > 0) {
+      const verification = CanonicalEntityManager.getInstance().verifyH2HBinding(match, verifiedH2h);
+      if (!verification.isValid) {
+        verifiedH2h.status = 'LOW_CONFIDENCE';
+        verifiedH2h.confidence = 0.3;
+      }
+    }
+
+    // 2. Data Quality Evaluation
     const homeFormCount = homeForm?.matchesPlayed ?? (standing?.home?.playedGames || 8);
     const awayFormCount = awayForm?.matchesPlayed ?? (standing?.away?.playedGames || 8);
 
     const dataQuality = DataValidator.computeDataQuality({
       match,
-      h2h,
+      h2h: verifiedH2h,
       homeFormCount,
       awayFormCount,
       hasStats: Boolean(stats),
@@ -233,6 +244,7 @@ export class MatchAnalysisEngine {
 
     return {
       match,
+      h2h: verifiedH2h,
       dataQuality,
       provenance,
       models: {
