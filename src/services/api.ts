@@ -1,5 +1,14 @@
 // src/services/api.ts - Client API Service & Real Data Bridge
-import { CanonicalMatch, MatchAnalysis, AIExplanation, MarketSignal, NesineMatchOddsData, NesineAvailability } from '@/types';
+import {
+  CanonicalMatch,
+  MatchAnalysis,
+  AIExplanation,
+  MarketSignal,
+  NesineMatchOddsData,
+  NesineAvailability,
+  CanonicalMatchSquadData,
+  ProviderHealth,
+} from '@/types';
 import { MatchAnalysisEngine } from '@/analysis/engine';
 import { AIExplanationService } from '@/ai/gemini';
 import { NesineOddsProvider } from '@/api/providers/NesineOddsProvider';
@@ -24,41 +33,48 @@ export class AppApiService {
         }
       } else {
         const json = await res.json().catch(() => ({}));
-        return { matches: [], isFallback: false, error: json.error?.message || 'PROVIDER_UNAVAILABLE' };
+        return { matches: [], isFallback: false, error: json.error?.message || `Sunucu hatası: HTTP ${res.status}` };
       }
-    } catch {
-      return { matches: [], isFallback: false, error: 'Ağ bağlantısı sağlanamadı veya canlı bültene erişilemiyor.' };
+    } catch (err: any) {
+      return { matches: [], isFallback: false, error: err?.message || 'Ağ bağlantısı sağlanamadı veya canlı bültene erişilemiyor.' };
     }
 
     return { matches: [], isFallback: false };
   }
 
   /**
-   * Runs or fetches match analysis
+   * Runs or fetches match analysis. Returns { analysis, error? } so that backend errors are visible to user.
    */
-  static async analyzeMatch(match: CanonicalMatch): Promise<MatchAnalysis> {
+  static async analyzeMatch(
+    match: CanonicalMatch,
+    squadData?: CanonicalMatchSquadData
+  ): Promise<{ analysis: MatchAnalysis; error?: string }> {
     try {
       const res = await fetch(`/api/match/${match.id}/analysis`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
-          return json.data;
+          return { analysis: json.data };
         }
+      } else {
+        const json = await res.json().catch(() => ({}));
+        const errMsg = json.error?.message || `Sunucu analizi başarısız oldu (HTTP ${res.status})`;
+        const fallback = MatchAnalysisEngine.run({ match, squadData });
+        return { analysis: fallback, error: errMsg };
       }
-    } catch {
-      // Server unreachable, use client-side pipeline with real match object
+    } catch (err: any) {
+      const fallback = MatchAnalysisEngine.run({ match, squadData });
+      return { analysis: fallback, error: err?.message || 'Ağ bağlantısı hatası: Analiz sunucusuna ulaşılamadı.' };
     }
 
-    // Client-side computation with strict real match data
-    return MatchAnalysisEngine.run({
-      match,
-    });
+    const fallback = MatchAnalysisEngine.run({ match, squadData });
+    return { analysis: fallback };
   }
 
   /**
-   * Requests contextual AI explanation from server or uses client-side fallback
+   * Requests contextual AI explanation from server or uses deterministic fallback with error reporting.
    */
-  static async getAIExplanation(analysis: MatchAnalysis): Promise<AIExplanation> {
+  static async getAIExplanation(analysis: MatchAnalysis): Promise<{ explanation: AIExplanation; error?: string }> {
     try {
       const res = await fetch('/api/ai/explain', {
         method: 'POST',
@@ -69,14 +85,39 @@ export class AppApiService {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
+          return { explanation: json.data };
+        }
+      } else {
+        const json = await res.json().catch(() => ({}));
+        const errMsg = json.error?.message || `AI açıklaması üretilemedi (HTTP ${res.status})`;
+        const fallback = AIExplanationService.generateFallbackExplanation(analysis);
+        return { explanation: fallback, error: errMsg };
+      }
+    } catch (err: any) {
+      const fallback = AIExplanationService.generateFallbackExplanation(analysis);
+      return { explanation: fallback, error: err?.message || 'Ağ bağlantısı hatası: AI servisine erişilemiyor.' };
+    }
+
+    const fallback = AIExplanationService.generateFallbackExplanation(analysis);
+    return { explanation: fallback };
+  }
+
+  /**
+   * Fetches provider status and health diagnostics from /api/providers/status
+   */
+  static async getProviderStatus(): Promise<ProviderHealth[]> {
+    try {
+      const res = await fetch('/api/providers/status');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
           return json.data;
         }
       }
     } catch {
-      // Network failure
+      // ignore
     }
-
-    return AIExplanationService.generateFallbackExplanation(analysis);
+    return [];
   }
 
   /**

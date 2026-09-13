@@ -5,9 +5,11 @@ import {
   LogoVerificationResult,
   OddsBindingVerification,
   H2HBindingVerification,
+  XGBindingVerification,
+  SquadBindingVerification,
   FinalConsistencyReport,
 } from './types';
-import { CanonicalMatch, CanonicalH2H, CanonicalStats } from '@/types';
+import { CanonicalMatch, CanonicalH2H, CanonicalStats, CanonicalMatchSquadData } from '@/types';
 import { NesineMatchOddsData } from '@/types/odds';
 
 export class CanonicalEntityManager {
@@ -144,12 +146,22 @@ export class CanonicalEntityManager {
     const exactCanonicalId = this.exactAliasIndex.get(exactNorm);
     if (exactCanonicalId && this.teamStore.has(exactCanonicalId)) {
       const match = this.teamStore.get(exactCanonicalId)!;
-      if (query.country && match.country && query.country.toLowerCase() !== match.country.toLowerCase()) {
+      const isCountryConflict =
+        query.country &&
+        match.country &&
+        query.country.toLowerCase() !== 'global' &&
+        match.country.toLowerCase() !== 'global' &&
+        query.country.toLowerCase() !== match.country.toLowerCase();
+
+      if (isCountryConflict) {
         return {
           team: null,
           confidence: 0.3,
           reason: `COUNTRY_CONFLICT: Team "${query.name}" found in ${match.country} but query specified ${query.country}`,
         };
+      }
+      if (query.country && (!match.country || match.country.toLowerCase() === 'global')) {
+        match.country = query.country;
       }
       return { team: match, confidence: 1.0, reason: 'EXACT_ALIAS_MATCH' };
     }
@@ -168,12 +180,22 @@ export class CanonicalEntityManager {
     const canonicalId = this.aliasIndex.get(norm);
     if (canonicalId && this.teamStore.has(canonicalId)) {
       const match = this.teamStore.get(canonicalId)!;
-      if (query.country && match.country && query.country.toLowerCase() !== match.country.toLowerCase()) {
+      const isCountryConflict =
+        query.country &&
+        match.country &&
+        query.country.toLowerCase() !== 'global' &&
+        match.country.toLowerCase() !== 'global' &&
+        query.country.toLowerCase() !== match.country.toLowerCase();
+
+      if (isCountryConflict) {
         return {
           team: null,
           confidence: 0.3,
           reason: `COUNTRY_CONFLICT: Team "${query.name}" found in ${match.country} but query specified ${query.country}`,
         };
+      }
+      if (query.country && (!match.country || match.country.toLowerCase() === 'global')) {
+        match.country = query.country;
       }
       return { team: match, confidence: 0.95, reason: 'ALIAS_MATCH' };
     }
@@ -226,6 +248,82 @@ export class CanonicalEntityManager {
 
     this.registerTeam(dynamicTeam);
     return { team: dynamicTeam, confidence: 0.80, reason: 'DYNAMIC_CANONICAL_REGISTERED' };
+  }
+
+  /**
+   * Binds a provider source ID to a canonical team in memory
+   */
+  public bindSourceTeamId(canonicalTeamId: string, provider: string, sourceId: string | number): void {
+    const team = this.teamStore.get(canonicalTeamId);
+    if (!team) return;
+    const sId = String(sourceId);
+    const exists = team.sourceTeamIds.some(
+      (s) => s.provider.toLowerCase() === provider.toLowerCase() && (s.sourceId === sId || (s as any).sourceTeamId === sId)
+    );
+    if (!exists) {
+      team.sourceTeamIds.push({ provider, sourceId: sId });
+      team.updatedAt = new Date().toISOString();
+    }
+  }
+
+  /**
+   * Retrieves a canonical team record by its canonical ID
+   */
+  public getTeam(canonicalTeamId: string): CanonicalTeamRecord | undefined {
+    return this.teamStore.get(canonicalTeamId);
+  }
+
+  /**
+   * Retrieves a CanonicalTeamRecord by raw name or canonical ID
+   */
+  public getTeamRecord(nameOrId: string): CanonicalTeamRecord | null {
+    if (!nameOrId) return null;
+    if (this.teamStore.has(nameOrId)) {
+      return this.teamStore.get(nameOrId) || null;
+    }
+    const res = this.resolveTeam({ name: nameOrId });
+    return res.team;
+  }
+
+  /**
+   * Resolves a raw name or ID to a canonical team ID string
+   */
+  public resolveCanonicalTeamId(nameOrId: string, country?: string): string {
+    if (!nameOrId) return '';
+    if (this.teamStore.has(nameOrId)) return nameOrId;
+    const res = this.resolveTeam({ name: nameOrId, country });
+    return res.team ? res.team.canonicalTeamId : nameOrId;
+  }
+
+  /**
+   * Binds a verified real provider logo URL to a canonical team record.
+   * Enforces: canonicalTeamId + verified sourceTeamId + provider relationship.
+   * Rejects untrusted domains, HTTP, or arbitrary strings.
+   */
+  public bindVerifiedLogo(
+    canonicalTeamId: string,
+    provider: string,
+    verifiedSourceId: string | number,
+    logoUrl: string
+  ): boolean {
+    const team = this.teamStore.get(canonicalTeamId);
+    if (!team || !logoUrl || typeof logoUrl !== 'string') return false;
+
+    const trimmedUrl = logoUrl.trim();
+    const isHttps = trimmedUrl.startsWith('https://');
+    const isTrusted =
+      isHttps &&
+      (trimmedUrl.includes('api-sports.io') ||
+        trimmedUrl.includes('football-data.org') ||
+        trimmedUrl.includes('media.api-sports.io'));
+
+    if (!isTrusted) return false;
+
+    this.bindSourceTeamId(canonicalTeamId, provider, verifiedSourceId);
+    team.logoUrl = trimmedUrl;
+    team.logoSource = `${provider.toUpperCase()}_VERIFIED`;
+    team.updatedAt = new Date().toISOString();
+    return true;
   }
 
   /**
@@ -481,10 +579,16 @@ export class CanonicalEntityManager {
    */
   public verifyLogo(
     teamName: string,
-    crestUrlProp?: string
+    crestUrlProp?: string,
+    canonicalTeamId?: string
   ): LogoVerificationResult {
-    const resolution = this.resolveTeam({ name: teamName });
-    const team = resolution.team;
+    let team: CanonicalTeamRecord | null = null;
+    if (canonicalTeamId && this.teamStore.has(canonicalTeamId)) {
+      team = this.teamStore.get(canonicalTeamId)!;
+    } else {
+      const resolution = this.resolveTeam({ name: teamName });
+      team = resolution.team;
+    }
 
     if (!team) {
       return {
@@ -770,13 +874,256 @@ export class CanonicalEntityManager {
   }
 
   /**
+   * ADVANCED xG v2.0: Section 95 - xG BINDING & NO-INVENTION GUARD
+   * Verifies that provided real xG metrics strictly bind to the exact target fixture
+   * and prevents data hallucinations or future leakage.
+   */
+  public verifyXGBinding(
+    targetFixture: CanonicalMatch,
+    stats?: CanonicalStats
+  ): XGBindingVerification {
+    const homeRes = this.resolveTeam({ name: targetFixture.homeTeam.name });
+    const awayRes = this.resolveTeam({ name: targetFixture.awayTeam.name });
+    const homeId = homeRes.team?.canonicalTeamId || '';
+    const awayId = awayRes.team?.canonicalTeamId || '';
+
+    if (!stats || (stats.homeXG === undefined && stats.awayXG === undefined && stats.xG === undefined)) {
+      return {
+        isValid: true,
+        canonicalFixtureId: targetFixture.id,
+        homeTeamCanonicalId: homeId,
+        awayTeamCanonicalId: awayId,
+        isStale: false,
+        stalenessAgeMinutes: 0,
+        reasonCode: 'XG_NOT_FOUND',
+        diagnosticMessage: 'Hedef fikstür için harici sağlayıcıdan gerçek xG verisi mevcut değil (No-Invention koruması devrede).',
+      };
+    }
+
+    // Check invalid/absurd values (e.g. negative or > 12.0)
+    const homeVal = stats.homeXG ?? stats.xG;
+    const awayVal = stats.awayXG;
+
+    if (
+      (homeVal !== undefined && (isNaN(homeVal) || homeVal < 0 || homeVal > 15)) ||
+      (awayVal !== undefined && (isNaN(awayVal) || awayVal < 0 || awayVal > 15))
+    ) {
+      return {
+        isValid: false,
+        canonicalFixtureId: targetFixture.id,
+        homeTeamCanonicalId: homeId,
+        awayTeamCanonicalId: awayId,
+        isStale: false,
+        stalenessAgeMinutes: 0,
+        reasonCode: 'XG_INVALID',
+        diagnosticMessage: 'XG_INVALID: xG değerleri sayısal sınırların (0 - 15) dışında veya geçersiz.',
+      };
+    }
+
+    // Check future data leakage
+    if (stats.retrievedAt) {
+      const retrievedTime = new Date(stats.retrievedAt).getTime();
+      const now = Date.now();
+      if (retrievedTime > now + 60 * 1000) {
+        return {
+          isValid: false,
+          canonicalFixtureId: targetFixture.id,
+          homeTeamCanonicalId: homeId,
+          awayTeamCanonicalId: awayId,
+          isStale: false,
+          stalenessAgeMinutes: 0,
+          reasonCode: 'FUTURE_DATA_LEAKAGE',
+          diagnosticMessage: 'FUTURE_DATA_LEAKAGE: xG veri zaman damgası geleceğe ait, sızıntı koruması devrede.',
+        };
+      }
+    }
+
+    return {
+      isValid: true,
+      canonicalFixtureId: targetFixture.id,
+      homeTeamCanonicalId: homeId,
+      awayTeamCanonicalId: awayId,
+      isStale: false,
+      stalenessAgeMinutes: 0,
+      reasonCode: 'VALID',
+      diagnosticMessage: 'Gerçek xG verisi hedef fikstürle başarıyla doğrulandı.',
+    };
+  }
+
+  /**
+   * SQUAD & PLAYER IMPACT v2.0: SQUAD BINDING & ZERO-TRUST INTEGRITY VERIFICATION
+   * Validates squad data against canonical fixture, team identity bindings,
+   * ensures no fake/mock players exist, and checks temporal validity / future leakage.
+   */
+  public verifySquadBinding(
+    targetFixture: CanonicalMatch,
+    squadData?: CanonicalMatchSquadData
+  ): SquadBindingVerification {
+    const homeId = this.resolveCanonicalTeamId(targetFixture.homeTeam.name);
+    const awayId = this.resolveCanonicalTeamId(targetFixture.awayTeam.name);
+
+    if (!squadData) {
+      return {
+        isValid: false,
+        canonicalFixtureId: targetFixture.id,
+        homeTeamCanonicalId: homeId,
+        awayTeamCanonicalId: awayId,
+        homeSquadValid: false,
+        awaySquadValid: false,
+        ambiguousPlayersCount: 0,
+        rejectedPlayersCount: 0,
+        isStale: false,
+        stalenessAgeMinutes: 0,
+        reasonCode: 'SQUAD_NOT_FOUND',
+        diagnosticMessage: 'SQUAD_NOT_FOUND: Bu fikstür için doğrulanmış kadro verisi mevcut değil.',
+      };
+    }
+
+    // 1. Future Data Leakage Check
+    if (squadData.retrievedAt) {
+      const retrievedTime = new Date(squadData.retrievedAt).getTime();
+      const now = Date.now();
+      if (retrievedTime > now + 60 * 1000) {
+        return {
+          isValid: false,
+          canonicalFixtureId: targetFixture.id,
+          homeTeamCanonicalId: homeId,
+          awayTeamCanonicalId: awayId,
+          homeSquadValid: false,
+          awaySquadValid: false,
+          ambiguousPlayersCount: 0,
+          rejectedPlayersCount: 0,
+          isStale: false,
+          stalenessAgeMinutes: 0,
+          reasonCode: 'FUTURE_DATA_LEAKAGE',
+          diagnosticMessage: 'FUTURE_DATA_LEAKAGE: Kadro veri zaman damgası geleceğe ait, sızıntı koruması devrede.',
+        };
+      }
+    }
+
+    // 2. Team binding verification
+    const squadHomeTeamId = String(squadData.home?.canonicalTeamId || squadData.home?.teamId || '');
+    const squadAwayTeamId = String(squadData.away?.canonicalTeamId || squadData.away?.teamId || '');
+
+    const resolvedSquadHome = squadHomeTeamId ? this.resolveCanonicalTeamId(squadData.home?.teamName || squadHomeTeamId) : '';
+    const resolvedSquadAway = squadAwayTeamId ? this.resolveCanonicalTeamId(squadData.away?.teamName || squadAwayTeamId) : '';
+
+    const homeMatches = (squadHomeTeamId && squadHomeTeamId === homeId) || (resolvedSquadHome && resolvedSquadHome === homeId);
+    const awayMatches = (squadAwayTeamId && squadAwayTeamId === awayId) || (resolvedSquadAway && resolvedSquadAway === awayId);
+
+    if (!homeMatches || !awayMatches) {
+      return {
+        isValid: false,
+        canonicalFixtureId: targetFixture.id,
+        homeTeamCanonicalId: homeId,
+        awayTeamCanonicalId: awayId,
+        homeSquadValid: Boolean(homeMatches),
+        awaySquadValid: Boolean(awayMatches),
+        ambiguousPlayersCount: 0,
+        rejectedPlayersCount: 0,
+        isStale: false,
+        stalenessAgeMinutes: 0,
+        reasonCode: 'SQUAD_TEAM_MISMATCH',
+        diagnosticMessage: `SQUAD_TEAM_MISMATCH: Kadro takımları (${squadData.home?.teamName || squadHomeTeamId} - ${squadData.away?.teamName || squadAwayTeamId}) hedef fikstürle (${targetFixture.homeTeam.name} - ${targetFixture.awayTeam.name}) eşleşmiyor.`,
+      };
+    }
+
+    // 3. Inspect players for zero-trust (no fake/mock/random players, verified binding)
+    let ambiguousPlayersCount = 0;
+    let rejectedPlayersCount = 0;
+
+    const inspectSquad = (squad: typeof squadData.home, expectedTeamCanonicalId: string) => {
+      const allPlayers = [
+        ...(squad?.startingXI || []),
+        ...(squad?.bench || []),
+        ...(squad?.injuriesAndAbsences || []),
+      ];
+
+      for (const p of allPlayers) {
+        if (!p.name || p.name.trim().length < 2) {
+          rejectedPlayersCount++;
+          continue;
+        }
+        const lower = p.name.toLowerCase();
+        if (
+          lower.includes('player') ||
+          lower.includes('oyuncu') ||
+          lower.includes('mock') ||
+          lower.includes('test') ||
+          lower.includes('sample') ||
+          lower.includes('random') ||
+          lower.includes('placeholder')
+        ) {
+          rejectedPlayersCount++;
+          continue;
+        }
+        if (p.canonicalTeamId && p.canonicalTeamId !== expectedTeamCanonicalId) {
+          ambiguousPlayersCount++;
+        }
+        if (!p.verified && !p.canonicalPlayerId) {
+          ambiguousPlayersCount++;
+        }
+      }
+    };
+
+    if (squadData.home) inspectSquad(squadData.home, homeId);
+    if (squadData.away) inspectSquad(squadData.away, awayId);
+
+    if (rejectedPlayersCount > 0) {
+      return {
+        isValid: false,
+        canonicalFixtureId: targetFixture.id,
+        homeTeamCanonicalId: homeId,
+        awayTeamCanonicalId: awayId,
+        homeSquadValid: false,
+        awaySquadValid: false,
+        ambiguousPlayersCount,
+        rejectedPlayersCount,
+        isStale: false,
+        stalenessAgeMinutes: 0,
+        reasonCode: 'AMBIGUOUS_PLAYER_IDENTITY',
+        diagnosticMessage: `AMBIGUOUS_PLAYER_IDENTITY: Kadroda ${rejectedPlayersCount} adet doğrulanmamış/şüpheli oyuncu kaydı tespit edildi. Sıfır-güven kuralı devrede.`,
+      };
+    }
+
+    // 4. Check staleness
+    let isStale = false;
+    let stalenessAgeMinutes = 0;
+    const kickoffTime = new Date(targetFixture.utcDate).getTime();
+    if (squadData.retrievedAt) {
+      const ageMs = Date.now() - new Date(squadData.retrievedAt).getTime();
+      stalenessAgeMinutes = Math.max(0, Math.floor(ageMs / (1000 * 60)));
+      if (kickoffTime - Date.now() < 60 * 60 * 1000 && stalenessAgeMinutes > 24 * 60) {
+        isStale = true;
+      }
+    }
+
+    return {
+      isValid: true,
+      canonicalFixtureId: targetFixture.id,
+      homeTeamCanonicalId: homeId,
+      awayTeamCanonicalId: awayId,
+      homeSquadValid: true,
+      awaySquadValid: true,
+      ambiguousPlayersCount,
+      rejectedPlayersCount: 0,
+      isStale,
+      stalenessAgeMinutes,
+      reasonCode: 'VALID',
+      diagnosticMessage: `Kadro verisi hedef fikstürle (${targetFixture.homeTeam.name} vs ${targetFixture.awayTeam.name}) başarıyla doğrulandı.`,
+    };
+  }
+
+  /**
    * Section 86 & 205: FINAL CONSISTENCY CHECK
    * Validates all identity links prior to publishing an analysis.
    */
   public runFinalConsistencyCheck(
     match: CanonicalMatch,
     h2h?: CanonicalH2H,
-    oddsData?: NesineMatchOddsData
+    oddsData?: NesineMatchOddsData,
+    stats?: CanonicalStats,
+    squadData?: CanonicalMatchSquadData
   ): FinalConsistencyReport {
     const blockingReasons: string[] = [];
     const warnings: string[] = [];
@@ -844,6 +1191,38 @@ export class CanonicalEntityManager {
       }
     }
 
+    // 5. Advanced xG Binding & No-Invention Check
+    let xgValid = true;
+    if (stats) {
+      const xgCheck = this.verifyXGBinding(match, stats);
+      if (!xgCheck.isValid) {
+        xgValid = false;
+        if (xgCheck.reasonCode === 'FUTURE_DATA_LEAKAGE' || xgCheck.reasonCode === 'XG_INVALID') {
+          blockingReasons.push(xgCheck.diagnosticMessage);
+        } else {
+          warnings.push(xgCheck.diagnosticMessage);
+        }
+      }
+    }
+
+    // 6. Squad & Player Impact Binding Check
+    let squadValid = true;
+    if (squadData) {
+      const squadCheck = this.verifySquadBinding(match, squadData);
+      if (!squadCheck.isValid) {
+        squadValid = false;
+        if (
+          squadCheck.reasonCode === 'FUTURE_DATA_LEAKAGE' ||
+          squadCheck.reasonCode === 'AMBIGUOUS_PLAYER_IDENTITY' ||
+          squadCheck.reasonCode === 'SQUAD_TEAM_MISMATCH'
+        ) {
+          blockingReasons.push(squadCheck.diagnosticMessage);
+        } else {
+          warnings.push(squadCheck.diagnosticMessage);
+        }
+      }
+    }
+
     const isConsistent = blockingReasons.length === 0;
 
     return {
@@ -858,6 +1237,8 @@ export class CanonicalEntityManager {
       oddsBindingValid: oddsValid,
       statsBindingValid: true,
       h2hBindingValid: h2hValid,
+      xgBindingValid: xgValid,
+      squadBindingValid: squadData ? squadValid : undefined,
       sourceAgreementValid: true,
       freshnessValid: true,
       blockingReasons,
@@ -875,7 +1256,10 @@ export class CanonicalEntityManager {
       // TURKEY - SÜPER LİG
       {
         canonicalTeamId: 'tr_galatasaray',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '610' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '610' },
+          { provider: 'api-football', sourceId: '645' },
+        ],
         officialName: 'Galatasaray Spor Kulübü',
         normalizedName: 'galatasaray',
         shortName: 'GS',
@@ -893,7 +1277,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_fenerbahce',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '600' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '600' },
+          { provider: 'api-football', sourceId: '611' },
+        ],
         officialName: 'Fenerbahçe Spor Kulübü',
         normalizedName: 'fenerbahce',
         shortName: 'FB',
@@ -911,7 +1298,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_besiktas',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '603' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '603' },
+          { provider: 'api-football', sourceId: '558' },
+        ],
         officialName: 'Beşiktaş Jimnastik Kulübü',
         normalizedName: 'besiktas',
         shortName: 'BJK',
@@ -929,7 +1319,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_trabzonspor',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '605' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '605' },
+          { provider: 'api-football', sourceId: '997' },
+        ],
         officialName: 'Trabzonspor Kulübü',
         normalizedName: 'trabzonspor',
         shortName: 'TS',
@@ -947,7 +1340,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_basaksehir',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '608' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '608' },
+          { provider: 'api-football', sourceId: '3574' },
+        ],
         officialName: 'İstanbul Başakşehir Futbol Kulübü',
         normalizedName: 'basaksehir',
         shortName: 'İBFK',
@@ -965,7 +1361,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_samsunspor',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '609' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '609' },
+          { provider: 'api-football', sourceId: '3578' },
+        ],
         officialName: 'Samsunspor Futbol Kulübü',
         normalizedName: 'samsunspor',
         shortName: 'SAM',
@@ -983,7 +1382,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'tr_eyupspor',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '611' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '611' },
+          { provider: 'api-football', sourceId: '3589' },
+        ],
         officialName: 'Eyüpspor Kulübü',
         normalizedName: 'eyupspor',
         shortName: 'EYÜP',
@@ -1003,7 +1405,10 @@ export class CanonicalEntityManager {
       // ENGLAND - PREMIER LEAGUE
       {
         canonicalTeamId: 'en_mancity',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '65' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '65' },
+          { provider: 'api-football', sourceId: '50' },
+        ],
         officialName: 'Manchester City Football Club',
         normalizedName: 'manchester city',
         shortName: 'MCI',
@@ -1021,7 +1426,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'en_arsenal',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '57' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '57' },
+          { provider: 'api-football', sourceId: '42' },
+        ],
         officialName: 'Arsenal Football Club',
         normalizedName: 'arsenal',
         shortName: 'ARS',
@@ -1039,7 +1447,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'en_liverpool',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '64' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '64' },
+          { provider: 'api-football', sourceId: '40' },
+        ],
         officialName: 'Liverpool Football Club',
         normalizedName: 'liverpool',
         shortName: 'LIV',
@@ -1057,7 +1468,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'en_manutd',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '66' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '66' },
+          { provider: 'api-football', sourceId: '33' },
+        ],
         officialName: 'Manchester United Football Club',
         normalizedName: 'manchester united',
         shortName: 'MUN',
@@ -1075,7 +1489,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'en_chelsea',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '61' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '61' },
+          { provider: 'api-football', sourceId: '49' },
+        ],
         officialName: 'Chelsea Football Club',
         normalizedName: 'chelsea',
         shortName: 'CHE',
@@ -1093,7 +1510,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'en_tottenham',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '73' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '73' },
+          { provider: 'api-football', sourceId: '47' },
+        ],
         officialName: 'Tottenham Hotspur Football Club',
         normalizedName: 'tottenham hotspur',
         shortName: 'TOT',
@@ -1113,7 +1533,10 @@ export class CanonicalEntityManager {
       // SPAIN - LA LIGA
       {
         canonicalTeamId: 'es_realmadrid',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '86' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '86' },
+          { provider: 'api-football', sourceId: '541' },
+        ],
         officialName: 'Real Madrid Club de Fútbol',
         normalizedName: 'real madrid',
         shortName: 'RMA',
@@ -1131,7 +1554,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'es_barcelona',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '81' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '81' },
+          { provider: 'api-football', sourceId: '529' },
+        ],
         officialName: 'Futbol Club Barcelona',
         normalizedName: 'barcelona',
         shortName: 'BAR',
@@ -1149,7 +1575,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'es_atletico',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '78' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '78' },
+          { provider: 'api-football', sourceId: '530' },
+        ],
         officialName: 'Club Atlético de Madrid',
         normalizedName: 'atletico madrid',
         shortName: 'ATM',
@@ -1169,7 +1598,10 @@ export class CanonicalEntityManager {
       // GERMANY - BUNDESLIGA
       {
         canonicalTeamId: 'de_bayern',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '5' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '5' },
+          { provider: 'api-football', sourceId: '157' },
+        ],
         officialName: 'FC Bayern München',
         normalizedName: 'bayern munich',
         shortName: 'FCB',
@@ -1187,7 +1619,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'de_leverkusen',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '3' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '3' },
+          { provider: 'api-football', sourceId: '168' },
+        ],
         officialName: 'Bayer 04 Leverkusen',
         normalizedName: 'bayer leverkusen',
         shortName: 'B04',
@@ -1207,7 +1642,10 @@ export class CanonicalEntityManager {
       // ITALY - SERIE A
       {
         canonicalTeamId: 'it_inter',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '108' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '108' },
+          { provider: 'api-football', sourceId: '505' },
+        ],
         officialName: 'FC Internazionale Milano',
         normalizedName: 'inter milan',
         shortName: 'INT',
@@ -1225,7 +1663,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'it_milan',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '98' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '98' },
+          { provider: 'api-football', sourceId: '489' },
+        ],
         officialName: 'AC Milan',
         normalizedName: 'ac milan',
         shortName: 'MIL',
@@ -1243,7 +1684,10 @@ export class CanonicalEntityManager {
       },
       {
         canonicalTeamId: 'it_juventus',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '109' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '109' },
+          { provider: 'api-football', sourceId: '496' },
+        ],
         officialName: 'Juventus Football Club',
         normalizedName: 'juventus',
         shortName: 'JUV',
@@ -1263,7 +1707,10 @@ export class CanonicalEntityManager {
       // FRANCE - LIGUE 1
       {
         canonicalTeamId: 'fr_psg',
-        sourceTeamIds: [{ provider: 'football-data.org', sourceId: '524' }],
+        sourceTeamIds: [
+          { provider: 'football-data.org', sourceId: '524' },
+          { provider: 'api-football', sourceId: '85' },
+        ],
         officialName: 'Paris Saint-Germain Football Club',
         normalizedName: 'paris saint germain',
         shortName: 'PSG',

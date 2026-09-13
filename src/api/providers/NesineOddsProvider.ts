@@ -328,7 +328,7 @@ export class NesineOddsProvider implements OddsProvider {
     matchId: string,
     homeTeam: string,
     awayTeam: string,
-    modelProbs?: { home?: number; draw?: number; away?: number; over25?: number; btts?: number }
+    modelProbs?: { home?: number; draw?: number; away?: number; over25?: number; under25?: number; btts?: number }
   ): Promise<NesineMatchOddsData> {
     try {
       const bulletin = await this.fetchBulletin();
@@ -593,6 +593,17 @@ export class NesineOddsProvider implements OddsProvider {
           )
         );
       }
+      if (modelProbs?.draw && currentSnapshot.markets.msX && currentSnapshot.fairProbabilities.draw) {
+        edges.push(
+          OddsMovementEngine.calculateProbabilityEdge(
+            'Maç Sonucu',
+            'MS X',
+            currentSnapshot.markets.msX,
+            currentSnapshot.fairProbabilities.draw,
+            modelProbs.draw
+          )
+        );
+      }
       if (modelProbs?.away && currentSnapshot.markets.ms2 && currentSnapshot.fairProbabilities.awayWin) {
         edges.push(
           OddsMovementEngine.calculateProbabilityEdge(
@@ -612,6 +623,28 @@ export class NesineOddsProvider implements OddsProvider {
             currentSnapshot.markets.over25,
             currentSnapshot.fairProbabilities.over25,
             modelProbs.over25
+          )
+        );
+      }
+      if (modelProbs?.under25 && currentSnapshot.markets.under25 && currentSnapshot.fairProbabilities.under25) {
+        edges.push(
+          OddsMovementEngine.calculateProbabilityEdge(
+            '2.5 Gol',
+            '2.5 Alt',
+            currentSnapshot.markets.under25,
+            currentSnapshot.fairProbabilities.under25,
+            modelProbs.under25
+          )
+        );
+      }
+      if (modelProbs?.btts && currentSnapshot.markets.bttsYes && currentSnapshot.fairProbabilities.bttsYes) {
+        edges.push(
+          OddsMovementEngine.calculateProbabilityEdge(
+            'Karşılıklı Gol',
+            'KG Var',
+            currentSnapshot.markets.bttsYes,
+            currentSnapshot.fairProbabilities.bttsYes,
+            modelProbs.btts
           )
         );
       }

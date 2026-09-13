@@ -19,6 +19,10 @@ import { NesineOddsPanel } from './NesineOddsPanel';
 import { AdvancedIntelligencePanel } from './AdvancedIntelligencePanel';
 import { QualityAndConfidencePanel } from './QualityAndConfidencePanel';
 import { H2HStatusPanel } from './H2HStatusPanel';
+import { TeamStrengthPanel } from './TeamStrengthPanel';
+import { OpponentAdjustedFormPanel } from './OpponentAdjustedFormPanel';
+import { AdvancedXGPanel } from './AdvancedXGPanel';
+import { SquadImpactPanel } from './SquadImpactPanel';
 import { AdvancedIntelligenceEngine } from '@/analysis/advancedIntelligence';
 
 interface DeepAnalysisViewProps {
@@ -45,6 +49,7 @@ interface DeepAnalysisViewProps {
   aiExplanation: AIExplanation | null;
   isLoadingAI: boolean;
   onRequestAIExplanation: () => void;
+  aiError?: string;
 }
 
 export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
@@ -55,6 +60,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
   aiExplanation,
   isLoadingAI,
   onRequestAIExplanation,
+  aiError,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'MARKETS' | 'ODDS' | 'MODELS' | 'ADVANCED' | 'QUALITY' | 'AI'>('MARKETS');
   const [recordedMap, setRecordedMap] = useState<Record<string, boolean>>({});
@@ -92,7 +98,7 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
       const squadSnapshot = AdvancedIntelligenceEngine.createSquadSnapshot(match);
       const marketRegime = AdvancedIntelligenceEngine.detectMarketRegime({ match });
       onRecordLedger(analysis, sig, {
-        squadSnapshotId: squadSnapshot.snapshotId,
+        squadSnapshotId: analysis.squadImpact?.squadSnapshotId || squadSnapshot.snapshotId,
         marketRegime: marketRegime.regime,
       });
       setRecordedMap((prev) => ({ ...prev, [key]: true }));
@@ -251,7 +257,9 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
       {/* TAB 1: MARKETS PROBABILITIES & RISK FILTER */}
       {/* ---------------------------------------------------- */}
       {activeSubTab === 'MARKETS' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <H2HStatusPanel h2h={analysis.h2h} match={analysis.match} />
+
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">Tüm Bahis Marketleri Analizi</h4>
@@ -370,6 +378,34 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
       {/* ---------------------------------------------------- */}
       {activeSubTab === 'MODELS' && (
         <div className="space-y-4">
+          {analysis.teamStrength && (
+            <TeamStrengthPanel
+              teamStrength={analysis.teamStrength}
+              homeTeamName={match.homeTeam.name}
+              awayTeamName={match.awayTeam.name}
+            />
+          )}
+          {analysis.opponentAdjustedForm && (
+            <OpponentAdjustedFormPanel
+              opponentAdjustedForm={analysis.opponentAdjustedForm}
+              homeTeamName={match.homeTeam.name}
+              awayTeamName={match.awayTeam.name}
+            />
+          )}
+          {analysis.advancedXG && (
+            <AdvancedXGPanel
+              advancedXG={analysis.advancedXG}
+              homeTeamName={match.homeTeam.name}
+              awayTeamName={match.awayTeam.name}
+            />
+          )}
+          {analysis.squadImpact && (
+            <SquadImpactPanel
+              squadImpact={analysis.squadImpact}
+              homeTeamName={match.homeTeam.name}
+              awayTeamName={match.awayTeam.name}
+            />
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Poisson */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
@@ -591,6 +627,16 @@ export const DeepAnalysisView: React.FC<DeepAnalysisViewProps> = ({
                 </button>
               )}
             </div>
+
+            {aiError && (
+              <div className="mb-4 bg-amber-950/30 border border-amber-800/60 rounded-xl p-3 flex items-start gap-2.5 text-xs text-amber-300">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <span className="font-bold">Yapay Zeka API Bildirimi: </span>
+                  <span>{aiError} (Deterministik istatistiksel özet sağlandı)</span>
+                </div>
+              </div>
+            )}
 
             {isLoadingAI ? (
               <div className="py-12 text-center">

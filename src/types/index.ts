@@ -43,6 +43,7 @@ export interface CanonicalMatch {
   matchday?: number;
   score?: CanonicalScore;
   odds?: CanonicalOdds;
+  lineageId?: string;
 }
 
 export interface CanonicalStats {
@@ -54,6 +55,12 @@ export interface CanonicalStats {
   yellowCards?: number;
   redCards?: number;
   xG?: number;
+  homeXG?: number;
+  awayXG?: number;
+  sourceProvider?: string;
+  retrievedAt?: string;
+  isRealXG?: boolean;
+  topScorers?: Array<{ player: string; goals: number }>;
 }
 
 export interface CanonicalStanding {
@@ -72,8 +79,20 @@ export interface CanonicalStanding {
 
 export type H2HStatus = 'AVAILABLE' | 'MISSING' | 'LOW_CONFIDENCE' | 'CONFLICTING';
 
+export type H2HFailureReason =
+  | 'NO_RECORDS'
+  | 'TEAM_ID_UNRESOLVED'
+  | 'PROVIDER_NOT_CONFIGURED'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_ERROR'
+  | 'RATE_LIMITED'
+  | 'BINDING_FAILED'
+  | 'CONFLICTING_DATA';
+
 export interface CanonicalH2H {
   status?: H2HStatus;
+  failureReason?: H2HFailureReason;
+  providerStatus?: string;
   matchesCount: number;
   homeWins: number;
   draws: number;
@@ -129,6 +148,43 @@ export interface CanonicalOdds {
 // Data Provenance & Freshness
 export type FreshnessStatus = 'FRESH' | 'RECENT' | 'STALE' | 'UNAVAILABLE';
 
+// Data Quality 2.0 Core Statuses
+export type DataQualityStatus =
+  | 'AVAILABLE'
+  | 'PARTIAL'
+  | 'MISSING'
+  | 'STALE'
+  | 'CONFLICTING'
+  | 'LOW_CONFIDENCE'
+  | 'INVALID'
+  | 'NOT_APPLICABLE';
+
+export type TemporalFreshnessClass =
+  | 'REALTIME'
+  | 'VERY_FRESH'
+  | 'FRESH'
+  | 'AGING'
+  | 'STALE';
+
+export interface ComponentQualityDetail {
+  component: string;
+  nameTr: string;
+  status: DataQualityStatus;
+  freshness: TemporalFreshnessClass;
+  retrievedAt?: string;
+  ageHours?: number;
+  sampleSize?: number;
+  score: number; // 0 - 100
+  source?: string;
+  isLeakageGuarded?: boolean;
+  issues?: string[];
+}
+
+export interface QualityExplanationItem {
+  type: 'CHECK' | 'WARN' | 'DANGER';
+  text: string;
+}
+
 export interface DataProvenance {
   source: string;
   provider: string;
@@ -140,7 +196,9 @@ export interface DataProvenance {
 }
 
 export interface DataQualityReport {
-  score: number; // 0 - 100
+  score: number; // 0 - 100 (composite Data Quality Score)
+  status: DataQualityStatus;
+  freshnessClass: TemporalFreshnessClass;
   factors: {
     sampleSufficiency: number;
     freshnessScore: number;
@@ -149,8 +207,18 @@ export interface DataQualityReport {
     providerReliability: number;
     xgAvailability: number;
     injuryDataAvailability: number;
+    identityIntegrity?: number;
+    leakageGuard?: number;
   };
+  componentDetails: Record<string, ComponentQualityDetail>;
+  qualityExplanations: QualityExplanationItem[];
+  confidenceCeiling: number; // 0 - 100
+  samplePenaltyApplied: boolean;
+  shrinkageRecommended: boolean;
+  futureLeakageDetected: boolean;
+  crossSourceConflicting: boolean;
   warnings: string[];
+  blockingReasons?: string[];
   isSufficientForAnalysis: boolean;
 }
 
@@ -236,11 +304,360 @@ export interface XGModelResult {
 export interface OddsModelResult {
   available: boolean;
   bookmakerMargin: number;
+  oddsHome?: number;
+  oddsDraw?: number;
+  oddsAway?: number;
+  rawImpliedHome?: number;
+  rawImpliedDraw?: number;
+  rawImpliedAway?: number;
   impliedHome: number;
   impliedDraw: number;
   impliedAway: number;
   valueEdgeHome?: number;
+  valueEdgeDraw?: number;
   valueEdgeAway?: number;
+  evHome?: number;
+  evDraw?: number;
+  evAway?: number;
+  isPositiveEvHome?: boolean;
+  isPositiveEvDraw?: boolean;
+  isPositiveEvAway?: boolean;
+  hasValueHome?: boolean;
+  hasValueDraw?: boolean;
+  hasValueAway?: boolean;
+  kellyHome?: number;
+  kellyDraw?: number;
+  kellyAway?: number;
+  halfKellyHome?: number;
+  halfKellyDraw?: number;
+  halfKellyAway?: number;
+}
+
+// Dynamic Team Strength Profile
+export interface TeamStrengthProfile {
+  teamId: string | number;
+  canonicalTeamId: string;
+  teamName: string;
+  overallStrength: number; // 0 - 100 (centered around league baseline ~50)
+  attackStrength: number; // 0 - 100
+  defenseStrength: number; // 0 - 100 (higher = concedes less)
+  homeStrength: number; // 0 - 100
+  awayStrength: number; // 0 - 100
+  homeAttackStrength: number;
+  homeDefenseStrength: number;
+  awayAttackStrength: number;
+  awayDefenseStrength: number;
+  recentStrength: number; // recency-weighted short-term capability
+  opponentAdjustedStrength: number; // iterative opponent difficulty adjusted
+  strengthUncertainty: number; // 0 - 100 (higher = more uncertain)
+  uncertaintyLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  sampleSize: number; // total games analyzed
+  homeSampleSize: number;
+  awaySampleSize: number;
+  dataQuality: number; // 0 - 100 (from Data Quality 2.0)
+  shrinkageFactor: number; // 0 - 1 (weight pulled toward baseline)
+  seasonTransitionApplied: boolean;
+  homeAdvantageNeutralized: boolean; // guards against double-counting with Poisson
+  updatedAt: string;
+  methodVersion: string; // e.g. "DTS_v2.0_OPP_ADJUSTED"
+  reasons: string[];
+}
+
+export interface MatchTeamStrength {
+  home: TeamStrengthProfile;
+  away: TeamStrengthProfile;
+  netStrengthAdvantage: number; // home.overallStrength - away.overallStrength
+  netOpponentAdjustedAdvantage: number;
+  homeAdvantageNeutralized: boolean;
+  combinedUncertainty: number;
+  modelDisagreementNote?: string;
+}
+
+// Opponent-Adjusted Form (OAF v2.0) Profile
+export interface OpponentAdjustedFormProfile {
+  teamId: string | number;
+  canonicalTeamId: string;
+  teamName: string;
+  adjustedFormScore: number; // 0 - 100 (primary OAF metric)
+  rawFormScore: number; // 0 - 100 (unadjusted baseline from raw W/D/L/GD)
+  opponentAdjustedScore: number; // 0 - 100 (difficulty adjusted)
+  recentFormScore: number; // 0 - 100 (time-weighted recency score)
+  homeFormScore: number; // 0 - 100 (venue isolated with shrinkage)
+  awayFormScore: number; // 0 - 100 (venue isolated with shrinkage)
+  attackForm: number; // 0 - 100 (recent scoring capability vs opposition)
+  defenseForm: number; // 0 - 100 (recent defensive solidity vs opposition)
+  weightedPoints: number; // decay-weighted points total
+  weightedGoalDifference: number; // dampened & weighted goal difference
+  opponentStrengthAverage: number; // 0 - 100 (mean difficulty of opponents faced)
+  sampleSize: number; // number of matches evaluated
+  formVolatility: number; // 0 - 100 (performance variance across matches)
+  uncertainty: number; // 0 - 100
+  uncertaintyLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  dataQuality: number; // 0 - 100 (linked to DQ 2.0)
+  recencyWeight: number; // alpha decay parameter applied
+  shrinkageFactor: number; // 0 - 1 (shrinkage toward baseline 50)
+  seasonTransitionApplied: boolean;
+  dtsDoubleCountingNeutralized: boolean; // guards against double-counting with DTS
+  eloDoubleCountingNeutralized: boolean; // guards against double-counting with Elo
+  updatedAt: string;
+  methodVersion: string; // "OAF_v2.0_OPP_ADJUSTED"
+  reasons: string[];
+}
+
+export interface MatchOpponentAdjustedForm {
+  home: OpponentAdjustedFormProfile;
+  away: OpponentAdjustedFormProfile;
+  netFormAdvantage: number; // home.adjustedFormScore - away.adjustedFormScore
+  combinedUncertainty: number; // 0 - 100
+  isReliable: boolean;
+  abstainRecommendation?: boolean;
+  contextDisagreementNote?: string;
+}
+
+// Advanced xG v2.0 Profile & Verification
+export type RealXGStatus =
+  | 'AVAILABLE'
+  | 'PARTIAL'
+  | 'MISSING'
+  | 'STALE'
+  | 'INVALID'
+  | 'CONFLICTING';
+
+export interface AdvancedXGProfile {
+  teamId: string | number;
+  canonicalTeamId: string;
+  teamName: string;
+  status: RealXGStatus;
+  realXGFor?: number;         // Verified match xG or recent per-match average xG
+  realXGAgainst?: number;     // Verified match xGA or recent per-match average xGA
+  realXGPerMatch?: number;    // Season/sample average xG per match
+  realXGAPerMatch?: number;   // Season/sample average xGA per match
+  homeXG?: number;            // Home-specific real xG
+  awayXG?: number;            // Away-specific real xG
+  homeXGA?: number;           // Home-specific real xGA
+  awayXGA?: number;           // Away-specific real xGA
+  recentXG?: number;          // Last N matches weighted real xG
+  recentXGA?: number;         // Last N matches weighted real xGA
+  xGOverperformance?: number; // Actual Goals Scored - Real xG (+ = overperforming / clinical, - = underperforming)
+  xGUnderperformance?: number;// Actual Goals Conceded - Real xGA (+ = conceded more than expected / leaky)
+  sampleSize: number;
+  uncertainty: number;        // 0 - 100 (higher = more uncertain)
+  dataQuality: number;        // 0 - 100 (from Data Quality 2.0)
+  source?: string;            // Provider name (e.g., 'api-football', 'understat')
+  retrievedAt?: string;
+  methodVersion: string;      // 'ADVANCED_xG_v2.0'
+  provenance?: {
+    provider?: string;
+    sourceFixtureId?: string;
+    sourceTeamId?: string;
+    retrievedAt?: string;
+    canonicalFixtureId?: string;
+    canonicalTeamId?: string;
+    verified: boolean;
+  };
+  regressionSignal?: {
+    isRegressionCandidate: boolean;
+    type: 'NEGATIVE_REGRESSION' | 'POSITIVE_REGRESSION' | 'NEUTRAL';
+    note: string;
+    confidence: number;
+  };
+  shrinkageFactor: number;    // 0 - 1 (shrinkage pulled toward baseline if sample is small)
+  reasons: string[];
+}
+
+export interface MatchAdvancedXG {
+  status: RealXGStatus;
+  isAvailable: boolean;
+  home: AdvancedXGProfile;
+  away: AdvancedXGProfile;
+  modelExpectedGoals: {
+    home: number;               // Theoretical Poisson lambdaHome or model expected goals
+    away: number;               // Theoretical Poisson lambdaAway or model expected goals
+    sourceModel: string;        // e.g., "Poisson (Bivariate PMF)"
+    homeExpectedGoals: number;
+    awayExpectedGoals: number;
+  };
+  provenance?: {
+    provider?: string;
+    fixtureId?: string;
+    verifiedAt?: string;
+    bindingValid: boolean;
+  };
+  dataQuality: number;          // 0 - 100
+  uncertainty: number;          // 0 - 100
+  sensitivityNote?: string;
+  methodVersion: string;        // 'ADVANCED_xG_v2.0'
+  reasons: string[];
+}
+
+export interface XGBindingVerification {
+  isValid: boolean;
+  canonicalFixtureId: string;
+  homeTeamCanonicalId: string;
+  awayTeamCanonicalId: string;
+  isStale: boolean;
+  stalenessAgeMinutes: number;
+  reasonCode:
+    | 'VALID'
+    | 'XG_NOT_FOUND'
+    | 'XG_TEAM_MISMATCH'
+    | 'XG_FIXTURE_MISMATCH'
+    | 'XG_STALE'
+    | 'XG_INVALID'
+    | 'FUTURE_DATA_LEAKAGE';
+  diagnosticMessage: string;
+}
+
+// SQUAD / PLAYER IMPACT v2.0 Core Types
+export type CanonicalPlayerPosition = 'GK' | 'DEF' | 'MID' | 'ATT' | 'UNKNOWN';
+
+export type CanonicalPlayerAvailabilityStatus =
+  | 'AVAILABLE'
+  | 'STARTING_EXPECTED'
+  | 'STARTING_CONFIRMED'
+  | 'BENCH_EXPECTED'
+  | 'INJURED'
+  | 'SUSPENDED'
+  | 'DOUBTFUL'
+  | 'UNAVAILABLE'
+  | 'UNKNOWN';
+
+export interface CanonicalPlayer {
+  canonicalPlayerId: string;
+  sourcePlayerId?: string | number;
+  provider?: string;
+  canonicalTeamId: string;
+  name: string;
+  number?: number;
+  position: CanonicalPlayerPosition;
+  role?: string;
+  status: CanonicalPlayerAvailabilityStatus;
+  isStarter?: boolean;
+  isCaptain?: boolean;
+  expectedMinutes?: number;
+  availabilityProbability?: number; // 0.0 to 1.0
+  // Verified performance statistics if provided by reliable source
+  seasonMinutes?: number;
+  seasonAppearances?: number;
+  goals?: number;
+  assists?: number;
+  cleanSheets?: number;
+  realXG?: number; // ONLY verified provider xG, never invented
+  realXA?: number;
+  injuryReason?: string;
+  suspensionReason?: string;
+  verified: boolean;
+}
+
+export interface CanonicalTeamSquad {
+  teamId: string | number;
+  canonicalTeamId: string;
+  teamName?: string;
+  formation?: string;
+  coach?: string;
+  isConfirmed: boolean; // true = CONFIRMED starting XI, false = EXPECTED lineup
+  lineupTimestamp?: string;
+  startingXI: CanonicalPlayer[];
+  bench: CanonicalPlayer[];
+  injuriesAndAbsences: CanonicalPlayer[];
+  positionCoverage: {
+    goalkeepers: number;
+    defenders: number;
+    midfielders: number;
+    attackers: number;
+  };
+}
+
+export interface CanonicalMatchSquadData {
+  home: CanonicalTeamSquad;
+  away: CanonicalTeamSquad;
+  provider: string;
+  retrievedAt: string;
+  isConfirmed: boolean;
+}
+
+export interface PlayerImpactItem {
+  player: CanonicalPlayer;
+  role: CanonicalPlayerPosition;
+  availabilityStatus: CanonicalPlayerAvailabilityStatus;
+  expectedMinutes: number;
+  availabilityProbability: number;
+  sampleSize: number;
+  shrinkageFactor: number; // 0 - 1 (low sample pulls impact toward 0)
+  impactScore: number; // relative impact on team capability (-10 to +10, not raw win prob)
+  impactConfidence: number; // 0 - 100
+  impactUncertainty: number; // 0 - 100
+  isKeyPlayer: boolean;
+  replacementCoverage: 'STRONG' | 'ADEQUATE' | 'DEPLETED' | 'UNKNOWN';
+  explanation: string;
+  dataQuality: DataQualityStatus;
+}
+
+export interface TeamSquadImpact {
+  canonicalTeamId: string;
+  teamName: string;
+  lineupStatus: 'CONFIRMED' | 'EXPECTED' | 'UNAVAILABLE';
+  availableCount: number;
+  doubtfulCount: number;
+  missingCount: number;
+  keyMissingCount: number;
+  goalkeeperStatus: {
+    status: 'STARTING_CONFIRMED' | 'STARTING_EXPECTED' | 'BACKUP' | 'MISSING' | 'UNKNOWN';
+    impactScore: number;
+    confidence: number;
+    uncertainty: number;
+    details: string;
+  };
+  defensiveCoverage: {
+    rating: 'SOLID' | 'ADEQUATE' | 'DEPLETED' | 'UNKNOWN';
+    activeDefendersCount: number;
+    impactScore: number;
+  };
+  attackingCoverage: {
+    rating: 'FULL_STRENGTH' | 'ADEQUATE' | 'DEPLETED' | 'UNKNOWN';
+    activeAttackersCount: number;
+    impactScore: number;
+  };
+  depthAssessment: 'STRONG' | 'ADEQUATE' | 'LIMITED' | 'UNKNOWN';
+  multipleAbsencesInteractionPenalty: number;
+  netSquadImpactScore: number; // -50 to +50 relative score
+  impactLevel: 'HIGH_POSITIVE' | 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'CRITICAL_NEGATIVE' | 'UNKNOWN';
+  confidence: number; // 0 - 100
+  uncertainty: number; // 0 - 100
+  dataQuality: DataQualityStatus;
+  players: PlayerImpactItem[];
+  reasons: string[];
+}
+
+export interface MatchSquadImpact {
+  squadSnapshotId: string; // Deterministic snapshot ID for reproducible analysis & ledger
+  status: DataQualityStatus;
+  isAvailable: boolean;
+  isConfirmed: boolean;
+  lineupType: 'CONFIRMED' | 'EXPECTED' | 'UNAVAILABLE';
+  home: TeamSquadImpact;
+  away: TeamSquadImpact;
+  relativeSquadAdvantage: number; // home.netSquadImpactScore - away.netSquadImpactScore
+  doubleCountingGuards: {
+    dtsIsolated: boolean; // Confirms DTS baseline was not duplicated
+    oafIsolated: boolean; // Confirms OAF recent form was not duplicated
+    xgIsolated: boolean;  // Confirms Real xG was not duplicated
+    eloProtected: boolean;// Confirms Elo was not altered
+    probabilityDirectlyManipulated: boolean; // Strictly false (no hardcoded prob shifts)
+  };
+  futureLeakageGuard: {
+    evaluationTimestamp: string;
+    fixtureKickoff: string;
+    passed: boolean;
+  };
+  dataQuality: number; // 0 - 100
+  uncertainty: number; // 0 - 100
+  methodVersion: string; // 'SQUAD_PLAYER_IMPACT_v2.0'
+  abstention: {
+    isAbstained: boolean;
+    reason?: string;
+  };
+  summary: string;
 }
 
 // Model Agreement & Dispersion
@@ -313,6 +730,19 @@ export interface MarketSignal {
   riskFilterFailures: string[];
   reasons: string[];
   warnings: string[];
+  odds?: number;
+  fairProbability?: number;
+  rawImpliedProbability?: number;
+  valueEdge?: number;
+  ev?: number;
+  isPositiveEv?: boolean;
+  hasValue?: boolean;
+  kellyFraction?: number;
+  halfKellyFraction?: number;
+  calibratedProbability?: number;
+  rawProbability?: number;
+  calibrationInfo?: PredictionCalibrationInfo;
+  clvRecord?: ClvRecord;
 }
 
 export interface AIExplanation {
@@ -346,6 +776,10 @@ export interface MatchAnalysis {
     xg?: XGModelResult;
     odds?: OddsModelResult;
   };
+  teamStrength?: MatchTeamStrength;
+  opponentAdjustedForm?: MatchOpponentAdjustedForm;
+  advancedXG?: MatchAdvancedXG;
+  squadImpact?: MatchSquadImpact;
   ensemble: Record<string, number>;
   agreement: Record<string, ModelAgreement>;
   uncertainty: UncertaintyMetrics;
@@ -364,10 +798,78 @@ export interface MatchAnalysis {
   createdAt: string;
 }
 
+// Prediction Ledger Settlement Status
+export type SettlementStatus = 'PENDING' | 'WON' | 'LOST' | 'VOID' | 'POSTPONED' | 'CANCELLED';
+
+export interface PredictionActualOutcome {
+  status: SettlementStatus;
+  fullTimeScore: { home: number; away: number };
+  outcomeWon: boolean;
+  brierError: number;
+  evaluatedAt: string;
+  settledAt?: string;
+  settlementVersion?: string;
+  provenance?: {
+    provider: string;
+    sourceFixtureId?: string;
+    canonicalFixtureId?: string;
+    finalScore?: string;
+    matchStatus?: MatchStatus;
+    settledAt: string;
+  };
+}
+
+// Closing Line Value (CLV) Record
+export interface ClvRecord {
+  predictionId: string;
+  canonicalFixtureId?: string;
+  market: string;
+  selection: string;
+  predictionOdds: number;
+  closingOdds?: number;
+  predictionTimestamp: string;
+  closingTimestamp?: string;
+  kickoffTimestamp?: string;
+  clvOddsRatio?: number;      // predictionOdds / closingOdds
+  clvPercent?: number;        // ((predictionOdds / closingOdds) - 1) * 100
+  predictionFairProb?: number;
+  closingFairProb?: number;
+  clvFairProbDelta?: number;  // closingFairProb - predictionFairProb
+  evClosing?: number;
+  isPositiveClv?: boolean;
+  status: 'CALCULATED' | 'MISSING' | 'LIVE_DISQUALIFIED';
+  calculationVersion: string;
+}
+
+export interface ClvAggregateReport {
+  sampleSize: number;
+  positiveClvCount: number;
+  positiveClvRate: number; // 0 - 100%
+  meanClvPercent: number;
+  medianClvPercent: number;
+  meanProbDelta?: number;
+  status: 'SUFFICIENT_DATA' | 'INSUFFICIENT_SAMPLE' | 'NO_DATA';
+}
+
+// Calibration Record for Prediction
+export interface PredictionCalibrationInfo {
+  method: 'ISOTONIC' | 'PLATT' | 'NONE';
+  version: string;
+  trainingCutoff?: string;
+  sampleSize?: number;
+  rawProbability: number;
+  calibratedProbability: number;
+  status: 'CALIBRATED' | 'UNCALIBRATED' | 'LOW_CONFIDENCE' | 'ABSTAIN';
+}
+
 // Prediction Ledger Record (Immutable)
 export interface PredictionRecord {
   predictionId: string;
   matchId: string;
+  canonicalFixtureId?: string;
+  sourceFixtureId?: string;
+  homeTeamId?: string | number;
+  awayTeamId?: string | number;
   matchDate: string;
   homeTeam: string;
   awayTeam: string;
@@ -385,6 +887,10 @@ export interface PredictionRecord {
     brier: number;
     logLoss: number;
   };
+  calibratedProbability?: number;
+  calibrationInfo?: PredictionCalibrationInfo;
+  evSnapshot?: number;
+  kellySnapshot?: number;
   analysisVersion: string;
   modelVersion: string;
   configVersion: string;
@@ -404,13 +910,10 @@ export interface PredictionRecord {
   marketRegime?: string;
   closingOdds?: number;
   clvPercent?: number;
+  clvRecord?: ClvRecord;
   recordVersion?: string;
-  actualOutcome?: {
-    fullTimeScore: { home: number; away: number };
-    outcomeWon: boolean;
-    brierError: number;
-    evaluatedAt: string;
-  };
+  settlementStatus?: SettlementStatus;
+  actualOutcome?: PredictionActualOutcome;
 }
 
 // Backtest Data & Results
@@ -434,6 +937,12 @@ export interface BacktestResult {
     challengerBrier: number;
     pDifference: number;
     recommendation: 'RETAIN_CHAMPION' | 'PROMOTE_CHALLENGER' | 'INSUFFICIENT_EVIDENCE';
+  };
+  clvReport?: ClvAggregateReport;
+  calibrationReport?: {
+    selectedMethod: string;
+    sampleSize: number;
+    calibratedBrier: number;
   };
 }
 

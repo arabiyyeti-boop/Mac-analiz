@@ -9,6 +9,57 @@ interface H2HStatusPanelProps {
 
 export const H2HStatusPanel: React.FC<H2HStatusPanelProps> = ({ h2h, match }) => {
   const status = h2h?.status || (h2h && h2h.matchesCount > 0 ? 'AVAILABLE' : 'MISSING');
+  const failureReason = h2h?.failureReason || 'NO_RECORDS';
+
+  // Specific content for MISSING state
+  const getMissingContent = () => {
+    switch (failureReason) {
+      case 'NO_RECORDS':
+        return {
+          badge: 'H2H VERİSİ BULUNAMADI',
+          title: 'H2H Verisi Bulunamadı',
+          desc: 'Bu iki takım için doğrulanmış H2H kaydı bulunamadı.',
+        };
+      case 'PROVIDER_NOT_CONFIGURED':
+        return {
+          badge: 'H2H YAPILANDIRILMAMIŞ',
+          title: 'H2H Sağlayıcı Yapılandırılmamış',
+          desc: 'API-Football anahtarı yapılandırılmadığı için harici H2H verisi sorgulanamadı. Analiz form ve lig verileriyle devam ediyor.',
+        };
+      case 'PROVIDER_ERROR':
+        return {
+          badge: 'H2H VERİSİ ALINAMADI',
+          title: 'H2H Verisi Alınamadı',
+          desc: 'H2H sağlayıcısından veri alınamadı. Bu nedenle H2H analizde kullanılmadı.',
+        };
+      case 'PROVIDER_TIMEOUT':
+        return {
+          badge: 'H2H ZAMAN AŞIMI',
+          title: 'H2H İsteği Zaman Aşımına Uğradı',
+          desc: 'H2H sağlayıcısından yanıt zaman aşımına uğradı. Bu nedenle H2H analize dahil edilmedi.',
+        };
+      case 'RATE_LIMITED':
+        return {
+          badge: 'H2H ORAN LİMİTİ AŞILDI',
+          title: 'Sağlayıcı İstek Limiti Aşıldı',
+          desc: 'Sağlayıcı istek limiti aşıldığı için H2H verisi geçici olarak sorgulanamadı.',
+        };
+      case 'TEAM_ID_UNRESOLVED':
+        return {
+          badge: 'H2H DOĞRULANAMADI',
+          title: 'Takım Kimliği Doğrulanamadı',
+          desc: 'Takımlar için güvenilir provider eşleşmesi bulunamadığı için H2H analize dahil edilmedi.',
+        };
+      default:
+        return {
+          badge: 'H2H MEVCUT DEĞİL',
+          title: 'Doğrulanmış H2H Verisi Mevcut Değil',
+          desc: 'Bu karşılaşma için sağlayıcı veritabanında doğrulanmış ikili rekabet kaydı bulunamadı.',
+        };
+    }
+  };
+
+  const missingInfo = getMissingContent();
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm">
@@ -36,7 +87,7 @@ export const H2HStatusPanel: React.FC<H2HStatusPanelProps> = ({ h2h, match }) =>
           {status === 'MISSING' && (
             <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-semibold">
               <Info className="w-3 h-3 text-slate-400" />
-              <span>H2H MEVCUT DEĞİL</span>
+              <span>{missingInfo.badge}</span>
             </span>
           )}
           {status === 'LOW_CONFIDENCE' && (
@@ -48,7 +99,7 @@ export const H2HStatusPanel: React.FC<H2HStatusPanelProps> = ({ h2h, match }) =>
           {status === 'CONFLICTING' && (
             <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-rose-950/80 text-rose-400 border border-rose-800/60 font-bold">
               <AlertOctagon className="w-3 h-3" />
-              <span>ÇELİŞKİLİ VERİ</span>
+              <span>H2H VERİSİ TUTARSIZ</span>
             </span>
           )}
         </div>
@@ -62,10 +113,10 @@ export const H2HStatusPanel: React.FC<H2HStatusPanelProps> = ({ h2h, match }) =>
           </div>
           <div>
             <div className="font-bold text-white mb-1">
-              Bu karşılaşma için doğrulanmış H2H verisi mevcut değil.
+              {missingInfo.title}
             </div>
             <p className="text-slate-400 text-[11px] leading-relaxed">
-              Veri sağlayıcılarında iki takım arasında doğrulanmış ikili rekabet kaydı bulunmuyor veya bu lig/karşılaşma için harici H2H sağlayıcısı aktif değil. Analiz motoru form ve lig temel verilerine göre çalışmaktadır.
+              {missingInfo.desc}
             </p>
           </div>
         </div>

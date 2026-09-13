@@ -194,7 +194,10 @@ export class OddsMovementEngine {
   }
 
   /**
-   * Item 123 & 124: Calculates Probability Edge against fair bookmaker implied probability
+   * Item 123 & 124: Calculates Probability Edge and Expected Value (EV) against bookmaker odds
+   *
+   * EV = (modelProbability * bookmakerOdd) - 1
+   * Positive EV Filter: strictly EV > 0 (EV <= 0 cannot produce a value edge)
    */
   public static calculateProbabilityEdge(
     market: string,
@@ -206,7 +209,28 @@ export class OddsMovementEngine {
     const rawImplied = Number((1 / bookmakerOdd).toFixed(4));
     const edge = Number((modelProbability - fairImpliedProbability).toFixed(4));
     const edgePercentage = Number((edge * 100).toFixed(2));
-    const hasValue = edge >= 0.03; // At least 3% mathematical edge threshold
+
+    // Expected Value: EV = (p * odd) - 1
+    const rawEv = (modelProbability * bookmakerOdd) - 1;
+    const ev = Number(rawEv.toFixed(4));
+
+    // Positive EV rule: strictly EV > 0 (with epsilon)
+    const isPositiveEv = ev > 0.0001;
+
+    // A selection only has value if it possesses BOTH a positive EV and a positive mathematical edge
+    const hasValue = isPositiveEv && edge > 0.0001;
+
+    // Kelly Criterion calculation: f = (p * odd - 1) / (odd - 1)
+    let kellyFraction: number | undefined = undefined;
+    let halfKellyFraction: number | undefined = undefined;
+
+    if (isPositiveEv && bookmakerOdd > 1.0) {
+      const f = rawEv / (bookmakerOdd - 1.0);
+      if (Number.isFinite(f) && f > 0) {
+        kellyFraction = Number(Math.min(0.25, f).toFixed(4));
+        halfKellyFraction = Number(Math.min(0.05, f * 0.5).toFixed(4));
+      }
+    }
 
     return {
       market,
@@ -217,9 +241,13 @@ export class OddsMovementEngine {
       modelProbability,
       edge,
       edgePercentage,
+      ev,
+      isPositiveEv,
       hasValue,
-      confidenceScore: Math.min(100, Math.max(0, Math.round((edge + 0.1) * 300))),
-      riskNotice: 'İstatistiksel avantaj (edge) bir kazanç garantisi değildir; model ile piyasa beklentisi arasındaki matematiksel farktır.',
+      kellyFraction,
+      halfKellyFraction,
+      confidenceScore: Math.min(100, Math.max(0, Math.round((Math.max(0, edge) + 0.1) * 300))),
+      riskNotice: 'İstatistiksel avantaj (edge) ve beklenen değer (EV) bir kazanç garantisi değildir; model ile piyasa arasındaki matematiksel farktır.',
     };
   }
 

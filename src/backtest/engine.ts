@@ -1,13 +1,17 @@
 // src/backtest/engine.ts - Walk-Forward Backtest & Model Drift Detection Engine
 import { PredictionRecord, BacktestResult } from '@/types';
 import { CalibrationEngine, EvaluationSample } from '@/analysis/calibration';
+import { ClvEngine } from '@/analysis/clv';
 
 export class BacktestEngine {
   /**
-   * Analyzes evaluated historical prediction records to measure true predictive calibration
+   * Analyzes evaluated historical prediction records to measure true predictive calibration & CLV
    */
   static runBacktest(records: PredictionRecord[]): BacktestResult {
-    const evaluated = records.filter((r) => r.actualOutcome !== undefined);
+    const evaluated = records.filter(
+      (r) => r.actualOutcome !== undefined && r.actualOutcome.status !== 'VOID'
+    );
+    const clvReport = ClvEngine.aggregateClv(records);
 
     if (evaluated.length === 0) {
       return {
@@ -25,11 +29,12 @@ export class BacktestEngine {
           pDifference: 0.02,
           recommendation: 'INSUFFICIENT_EVIDENCE',
         },
+        clvReport,
       };
     }
 
     const samples: EvaluationSample[] = evaluated.map((r) => ({
-      predictedProbability: r.modelProbability,
+      predictedProbability: r.calibratedProbability ?? r.modelProbability,
       actualOutcome: r.actualOutcome!.outcomeWon ? 1 : 0,
     }));
 
@@ -38,6 +43,9 @@ export class BacktestEngine {
     const averageBrierScore = CalibrationEngine.calculateBrierScore(samples);
     const averageLogLoss = CalibrationEngine.calculateLogLoss(samples);
     const calibrationBins = CalibrationEngine.evaluateBins(samples, 5);
+
+    // Run calibration model evaluation
+    const calModel = CalibrationEngine.trainCalibrationModel(records, '1X2');
 
     // Model Drift Detection: Compare first half vs recent half (or last 10)
     let driftDetected = false;
@@ -49,13 +57,13 @@ export class BacktestEngine {
 
       const recentBrier = CalibrationEngine.calculateBrierScore(
         recentWindow.map((r) => ({
-          predictedProbability: r.modelProbability,
+          predictedProbability: r.calibratedProbability ?? r.modelProbability,
           actualOutcome: r.actualOutcome!.outcomeWon ? 1 : 0,
         }))
       );
       const olderBrier = CalibrationEngine.calculateBrierScore(
         olderWindow.map((r) => ({
-          predictedProbability: r.modelProbability,
+          predictedProbability: r.calibratedProbability ?? r.modelProbability,
           actualOutcome: r.actualOutcome!.outcomeWon ? 1 : 0,
         }))
       );
@@ -97,6 +105,12 @@ export class BacktestEngine {
         challengerBrier,
         pDifference: pDiff,
         recommendation,
+      },
+      clvReport,
+      calibrationReport: {
+        selectedMethod: calModel.method,
+        sampleSize: calModel.sampleSize,
+        calibratedBrier: calModel.validationBrier,
       },
     };
   }

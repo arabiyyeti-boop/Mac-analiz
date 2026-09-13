@@ -219,7 +219,11 @@ export interface ProbabilityEdgeResult {
   modelProbability: number;
   edge: number; // modelProbability - fairImpliedProbability
   edgePercentage: number; // edge * 100
-  hasValue: boolean;
+  ev: number; // (modelProbability * bookmakerOdd) - 1
+  isPositiveEv: boolean; // ev > 0
+  hasValue: boolean; // isPositiveEv && edge > 0
+  kellyFraction?: number;
+  halfKellyFraction?: number;
   confidenceScore: number;
   riskNotice: string; // Mandatory risk disclosure
 }

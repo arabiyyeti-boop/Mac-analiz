@@ -8,15 +8,28 @@ export class FootballDataOrgProvider implements FootballDataProvider {
   private baseUrl = 'https://api.football-data.org/v4';
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey || process.env.FOOTBALL_DATA_ORG_KEY || process.env.FOOTBALL_API_KEY || '';
+    this.apiKey = this.cleanKey(apiKey || process.env.FOOTBALL_DATA_ORG_KEY || process.env.FOOTBALL_API_KEY || '');
+  }
+
+  private cleanKey(key?: string): string {
+    if (!key) return '';
+    return key.trim().replace(/^["']|["']$/g, '');
+  }
+
+  public getEffectiveKey(): string {
+    const direct = this.cleanKey(this.apiKey);
+    if (direct) return direct;
+    return this.cleanKey(process.env.FOOTBALL_DATA_ORG_KEY || process.env.FOOTBALL_API_KEY || '');
   }
 
   isConfigured(): boolean {
-    return Boolean(this.apiKey && this.apiKey.trim().length > 5);
+    const key = this.getEffectiveKey();
+    return Boolean(key && key.length > 5);
   }
 
   private async fetchWithAuth<T>(endpoint: string): Promise<{ data: T; latencyMs: number }> {
-    if (!this.isConfigured()) {
+    const key = this.getEffectiveKey();
+    if (!key || key.length <= 5) {
       throw new Error(`PROVIDER_NOT_CONFIGURED: ${this.name} requires a valid API key in environment variables.`);
     }
 
@@ -24,7 +37,7 @@ export class FootballDataOrgProvider implements FootballDataProvider {
     const url = `${this.baseUrl}${endpoint}`;
     const response = await fetch(url, {
       headers: {
-        'X-Auth-Token': this.apiKey,
+        'X-Auth-Token': key,
         'Accept': 'application/json',
       },
     });

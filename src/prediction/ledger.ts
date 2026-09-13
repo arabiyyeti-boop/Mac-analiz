@@ -1,5 +1,11 @@
 // src/prediction/ledger.ts - Immutable Prediction Ledger & Outcome Evaluator
-import { PredictionRecord, MatchAnalysis, MarketSignal } from '@/types';
+import {
+  PredictionRecord,
+  MatchAnalysis,
+  MarketSignal,
+  PredictionActualOutcome,
+  ClvRecord,
+} from '@/types';
 import { StorageProvider } from '@/storage/StorageProvider';
 import { defaultStorage } from '@/storage/LocalStorageProvider';
 
@@ -30,6 +36,8 @@ export class PredictionLedger {
       closingOdds?: number;
       clvPercent?: number;
       recordVersion?: string;
+      ev?: number;
+      kellyFraction?: number;
     }
   ): Promise<PredictionRecord> {
     const existing = await this.getAllRecords();
@@ -56,6 +64,10 @@ export class PredictionLedger {
     const record: PredictionRecord = {
       predictionId,
       matchId: analysis.match.id,
+      canonicalFixtureId: analysis.match.lineageId || analysis.match.id,
+      sourceFixtureId: analysis.match.externalId || analysis.match.id,
+      homeTeamId: analysis.match.homeTeam.id,
+      awayTeamId: analysis.match.awayTeam.id,
       matchDate: analysis.match.utcDate,
       homeTeam: analysis.match.homeTeam.name,
       awayTeam: analysis.match.awayTeam.name,
@@ -73,6 +85,10 @@ export class PredictionLedger {
         brier: analysis.calibration[signal.market]?.brierScore ?? 0.20,
         logLoss: analysis.calibration[signal.market]?.logLoss ?? 0.58,
       },
+      calibratedProbability: (signal as any).calibratedProbability,
+      calibrationInfo: (signal as any).calibrationInfo,
+      evSnapshot: signal.ev ?? oddsData?.ev,
+      kellySnapshot: signal.halfKellyFraction ?? signal.kellyFraction ?? oddsData?.kellyFraction,
       analysisVersion: analysis.versions.analysisVersion,
       modelVersion: analysis.versions.modelVersion,
       configVersion: analysis.versions.configVersion,
@@ -88,13 +104,14 @@ export class PredictionLedger {
             overround: oddsData.overround,
           }
         : undefined,
-      probabilityEdge: oddsData?.probabilityEdge,
+      probabilityEdge: oddsData?.probabilityEdge ?? signal.valueEdge,
       lookAheadBiasVerified: isPriorToKickoff,
       squadSnapshotId: oddsData?.squadSnapshotId,
       marketRegime: oddsData?.marketRegime,
       closingOdds: oddsData?.closingOdds,
       clvPercent: oddsData?.clvPercent,
-      recordVersion: oddsData?.recordVersion || 'v1',
+      recordVersion: oddsData?.recordVersion || 'v2',
+      settlementStatus: 'PENDING',
     };
 
     existing.unshift(record);
@@ -111,17 +128,31 @@ export class PredictionLedger {
   }
 
   /**
-   * Evaluates prediction when full time match score is final
-   * Appends actualOutcome without mutating original prediction probability
+   * Retrieves all pending prediction records awaiting settlement
    */
-  async evaluatePrediction(predictionId: string, homeScore: number, awayScore: number): Promise<PredictionRecord | null> {
+  async getPendingRecords(): Promise<PredictionRecord[]> {
+    const records = await this.getAllRecords();
+    return records.filter(
+      (r) => !r.actualOutcome || r.settlementStatus === 'PENDING'
+    );
+  }
+
+  /**
+   * Evaluates prediction when full time match score is final
+   * Appends actualOutcome without mutating original prediction probability or inputs
+   */
+  async evaluatePrediction(
+    predictionId: string,
+    homeScore: number,
+    awayScore: number
+  ): Promise<PredictionRecord | null> {
     const records = await this.getAllRecords();
     const index = records.findIndex((r) => r.predictionId === predictionId);
     if (index === -1) return null;
 
     const current = records[index];
-    if (current.actualOutcome) {
-      return current; // already evaluated
+    if (current.actualOutcome && current.settlementStatus && current.settlementStatus !== 'PENDING') {
+      return current; // already settled
     }
 
     let outcomeWon = false;
@@ -154,16 +185,79 @@ export class PredictionLedger {
     }
 
     const y = outcomeWon ? 1 : 0;
-    const brierError = Number(Math.pow(current.modelProbability - y, 2).toFixed(4));
+    const prob = current.calibratedProbability ?? current.modelProbability;
+    const brierError = Number(Math.pow(prob - y, 2).toFixed(4));
+    const now = new Date().toISOString();
+
+    const actualOutcome: PredictionActualOutcome = {
+      status: outcomeWon ? 'WON' : 'LOST',
+      fullTimeScore: { home: homeScore, away: awayScore },
+      outcomeWon,
+      brierError,
+      evaluatedAt: now,
+      settledAt: now,
+      settlementVersion: 'v2.0-manual',
+    };
 
     const updatedRecord: PredictionRecord = {
       ...current,
-      actualOutcome: {
-        fullTimeScore: { home: homeScore, away: awayScore },
-        outcomeWon,
-        brierError,
-        evaluatedAt: new Date().toISOString(),
-      },
+      settlementStatus: outcomeWon ? 'WON' : 'LOST',
+      actualOutcome,
+    };
+
+    records[index] = updatedRecord;
+    await this.storage.set(LEDGER_STORAGE_KEY, records);
+    return updatedRecord;
+  }
+
+  /**
+   * Updates record with automated settlement outcome without mutating original snapshot
+   */
+  async updateRecordSettlement(
+    predictionId: string,
+    outcome: PredictionActualOutcome
+  ): Promise<PredictionRecord | null> {
+    const records = await this.getAllRecords();
+    const index = records.findIndex((r) => r.predictionId === predictionId);
+    if (index === -1) return null;
+
+    const current = records[index];
+    // Idempotency: If already settled with same status, return early
+    if (
+      current.settlementStatus === outcome.status &&
+      current.actualOutcome?.settlementVersion === outcome.settlementVersion
+    ) {
+      return current;
+    }
+
+    const updatedRecord: PredictionRecord = {
+      ...current,
+      settlementStatus: outcome.status,
+      actualOutcome: outcome,
+    };
+
+    records[index] = updatedRecord;
+    await this.storage.set(LEDGER_STORAGE_KEY, records);
+    return updatedRecord;
+  }
+
+  /**
+   * Updates record with Closing Line Value (CLV) data
+   */
+  async updateRecordClv(
+    predictionId: string,
+    clv: ClvRecord
+  ): Promise<PredictionRecord | null> {
+    const records = await this.getAllRecords();
+    const index = records.findIndex((r) => r.predictionId === predictionId);
+    if (index === -1) return null;
+
+    const current = records[index];
+    const updatedRecord: PredictionRecord = {
+      ...current,
+      closingOdds: clv.closingOdds ?? current.closingOdds,
+      clvPercent: clv.clvPercent ?? current.clvPercent,
+      clvRecord: clv,
     };
 
     records[index] = updatedRecord;

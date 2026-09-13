@@ -293,15 +293,15 @@ export class AdvancedIntelligenceEngine {
    */
   public static computeDataQualityVector(analysis: MatchAnalysis): DataQualityVector {
     const dq = analysis.dataQuality;
-    const fixtureQuality = 90; // Verified fixture
-    const teamQuality = 85;
-    const formQuality = Math.min(100, Math.round(dq.score * 1.05));
-    const xGQuality = analysis.models.poisson ? 80 : 0;
-    const injuryQuality = 75;
-    const oddsQuality = 85;
-    const lineupQuality = 70;
-    const freshnessQuality = Math.round(dq.factors.freshnessScore * 100);
-    const sourceAgreement = 90;
+    const fixtureQuality = dq.componentDetails?.['fixture']?.score ?? 90;
+    const teamQuality = dq.factors.identityIntegrity ?? 85;
+    const formQuality = Math.min(100, Math.round((dq.factors.sampleSufficiency / 30) * 100));
+    const xGQuality = dq.factors.xgAvailability > 0 ? 100 : (analysis.models.poisson ? 70 : 40);
+    const injuryQuality = dq.componentDetails?.['injuries']?.score ?? (dq.factors.injuryDataAvailability > 0 ? 90 : 40);
+    const oddsQuality = dq.componentDetails?.['odds']?.score ?? (dq.status === 'INVALID' ? 0 : 85);
+    const lineupQuality = dq.componentDetails?.['injuries']?.status === 'AVAILABLE' ? 85 : 60;
+    const freshnessQuality = Math.min(100, Math.round((dq.factors.freshnessScore / 20) * 100));
+    const sourceAgreement = dq.crossSourceConflicting ? 40 : 95;
 
     return {
       overallScore: dq.score,
@@ -328,16 +328,18 @@ export class AdvancedIntelligenceEngine {
     const agreementScore = ms1Agreement ? Math.round((1 - ms1Agreement.divergenceScore) * 100) : 70;
     const primaryProb = analysis.primarySignal?.modelProbability || 0.5;
 
-    // 163: STRICT CONFIDENCE CEILING
-    // If Data Quality < 60, confidence cannot exceed 50
-    // If Data Quality < 75, confidence cannot exceed 72
-    let maxAllowedCeiling = 100;
+    // 163: STRICT CONFIDENCE CEILING (Data Quality 2.0 Integration)
+    let maxAllowedCeiling = analysis.dataQuality.confidenceCeiling ?? 100;
     let confidenceCeilingApplied = false;
 
     if (dqScore < 60) {
-      maxAllowedCeiling = 50;
+      maxAllowedCeiling = Math.min(maxAllowedCeiling, 50);
     } else if (dqScore < 75) {
-      maxAllowedCeiling = 72;
+      maxAllowedCeiling = Math.min(maxAllowedCeiling, 70);
+    }
+
+    if (maxAllowedCeiling < 100) {
+      confidenceCeilingApplied = true;
     }
 
     const probStrength = Math.round(Math.abs(primaryProb - 0.33) * 35); // 0 - 25

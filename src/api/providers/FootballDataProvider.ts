@@ -1,5 +1,5 @@
 // src/api/providers/FootballDataProvider.ts - Abstraction Interface for Real Football Providers
-import { CanonicalMatch, CanonicalForm, CanonicalH2H, CanonicalStanding, CanonicalStats, CanonicalOdds } from '@/types';
+import { CanonicalMatch, CanonicalForm, CanonicalH2H, CanonicalStanding, CanonicalStats, CanonicalOdds, CanonicalMatchSquadData } from '@/types';
 
 export interface ProviderFixtureQuery {
   dateFrom?: string; // YYYY-MM-DD
@@ -30,7 +30,11 @@ export interface FootballDataProvider {
     standing?: { home?: CanonicalStanding; away?: CanonicalStanding };
     stats?: CanonicalStats;
     odds?: CanonicalOdds;
+    squadData?: CanonicalMatchSquadData;
   }>>;
   getStandings(competitionCode: string): Promise<ProviderResult<CanonicalStanding[]>>;
   getH2H(homeTeamId: string | number, awayTeamId: string | number): Promise<ProviderResult<CanonicalH2H>>;
+  searchTeams?(query: string): Promise<ProviderResult<Array<{ id: number; name: string; country: string; logo?: string }>>>;
+  getLineups?(fixtureId: string | number, targetMatch?: CanonicalMatch): Promise<ProviderResult<CanonicalMatchSquadData | undefined>>;
+  findFixtureId?(homeTeamId: number | string, awayTeamId: number | string, date: string): Promise<number | null>;
 }

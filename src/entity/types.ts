@@ -83,6 +83,46 @@ export interface H2HBindingVerification {
   diagnosticMessage: string;
 }
 
+export interface XGBindingVerification {
+  isValid: boolean;
+  canonicalFixtureId: string;
+  homeTeamCanonicalId: string;
+  awayTeamCanonicalId: string;
+  isStale: boolean;
+  stalenessAgeMinutes: number;
+  reasonCode:
+    | 'VALID'
+    | 'XG_NOT_FOUND'
+    | 'XG_TEAM_MISMATCH'
+    | 'XG_FIXTURE_MISMATCH'
+    | 'XG_STALE'
+    | 'XG_INVALID'
+    | 'FUTURE_DATA_LEAKAGE';
+  diagnosticMessage: string;
+}
+
+export interface SquadBindingVerification {
+  isValid: boolean;
+  canonicalFixtureId: string;
+  homeTeamCanonicalId: string;
+  awayTeamCanonicalId: string;
+  homeSquadValid: boolean;
+  awaySquadValid: boolean;
+  ambiguousPlayersCount: number;
+  rejectedPlayersCount: number;
+  isStale: boolean;
+  stalenessAgeMinutes: number;
+  reasonCode:
+    | 'VALID'
+    | 'SQUAD_NOT_FOUND'
+    | 'SQUAD_TEAM_MISMATCH'
+    | 'SQUAD_FIXTURE_MISMATCH'
+    | 'SQUAD_STALE'
+    | 'AMBIGUOUS_PLAYER_IDENTITY'
+    | 'FUTURE_DATA_LEAKAGE';
+  diagnosticMessage: string;
+}
+
 export interface FinalConsistencyReport {
   isConsistent: boolean;
   fixtureIdentityValid: boolean;
@@ -95,6 +135,8 @@ export interface FinalConsistencyReport {
   oddsBindingValid: boolean;
   statsBindingValid: boolean;
   h2hBindingValid: boolean;
+  xgBindingValid?: boolean;
+  squadBindingValid?: boolean;
   sourceAgreementValid: boolean;
   freshnessValid: boolean;
   blockingReasons: string[];

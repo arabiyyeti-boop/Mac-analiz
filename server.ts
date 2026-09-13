@@ -8,6 +8,9 @@ import { NesineOddsProvider } from './src/api/providers/NesineOddsProvider';
 import { MatchAnalysisEngine } from './src/analysis/engine';
 import { AIExplanationService } from './src/ai/gemini';
 import { canonicalEntityManager } from './src/entity/CanonicalEntityManager';
+import { predictionSettlementService } from './src/prediction/settlement';
+import { ClvEngine } from './src/analysis/clv';
+import { predictionLedger } from './src/prediction/ledger';
 import { APP_VERSION } from './src/config/analysisConfig';
 import { ApiResponse } from './src/types';
 
@@ -17,22 +20,200 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Middleware
+  // Trust proxy for secure client IP resolution behind Cloud Run / Vercel reverse proxies
+  app.set('trust proxy', 1);
+
+  // 1. Controlled CORS Middleware
+  const parseAllowedOrigins = (): Set<string> => {
+    const set = new Set<string>();
+    const envOrigins = process.env.ALLOWED_ORIGINS;
+    if (envOrigins) {
+      envOrigins.split(',').forEach((o) => {
+        const trimmed = o.trim();
+        if (trimmed) set.add(trimmed);
+      });
+    }
+    // Controlled development origins (active in non-production environments)
+    if (process.env.NODE_ENV !== 'production') {
+      set.add('http://localhost:3000');
+      set.add('http://localhost:5173');
+      set.add('http://127.0.0.1:3000');
+      set.add('http://127.0.0.1:5173');
+    }
+    return set;
+  };
+
+  const allowedOrigins = parseAllowedOrigins();
+
+  app.use((req: Request, res: Response, next) => {
+    const origin = req.headers.origin;
+
+    if (origin) {
+      const isAllowed =
+        allowedOrigins.has(origin) ||
+        process.env.NODE_ENV !== 'production' ||
+        origin.endsWith('.run.app') ||
+        origin.includes('ai.studio') ||
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1');
+
+      if (isAllowed) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        res.setHeader('Access-Control-Max-Age', '86400');
+      } else if (req.method === 'OPTIONS') {
+        res.status(403).json({
+          error: 'CORS_FORBIDDEN',
+          message: 'Origin not allowed by CORS policy.',
+        });
+        return;
+      }
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+
+    next();
+  });
+
+  // 2. Request Parsing & Base Security Headers
   app.use(express.json({ limit: '2mb' }));
 
-  // Security Headers
-  app.use((req, res, next) => {
+  app.use((req: Request, res: Response, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     next();
   });
+
+  // 3. HTTP Cache Headers for Dynamic API Endpoints
+  // Ensures browsers, CDNs, and intermediate proxies never serve stale match analysis or odds
+  app.use('/api', (req: Request, res: Response, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+    next();
+  });
+
+  // 4. IP-Based Rate Limiting (In-Memory, Serverless-Safe)
+  interface RateLimitEntry {
+    count: number;
+    resetTime: number;
+  }
+
+  function createRateLimiter(options: {
+    windowMs: number;
+    limit: number;
+    scope: string;
+    exemptPaths?: string[];
+  }) {
+    const store = new Map<string, RateLimitEntry>();
+    const { windowMs, limit, scope, exemptPaths = [] } = options;
+
+    return (req: Request, res: Response, next: () => void) => {
+      // Exclude exempt paths (e.g., /api/health)
+      if (exemptPaths.some((p) => req.path === p)) {
+        return next();
+      }
+
+      // Determine client IP safely (IPv4 & IPv6 supported)
+      let clientIp = req.ip;
+      if (!clientIp) {
+        const forwarded = req.headers['x-forwarded-for'];
+        if (typeof forwarded === 'string') {
+          clientIp = forwarded.split(',')[0]?.trim();
+        }
+      }
+      if (!clientIp) {
+        clientIp = req.socket.remoteAddress || '127.0.0.1';
+      }
+
+      const now = Date.now();
+      const key = `${scope}:${clientIp}`;
+
+      // Serverless memory safeguard: opportunistic cleanup if store exceeds 2000 entries
+      if (store.size > 2000) {
+        for (const [k, v] of store.entries()) {
+          if (v.resetTime <= now) {
+            store.delete(k);
+          }
+        }
+      }
+
+      let entry = store.get(key);
+      if (!entry || now >= entry.resetTime) {
+        entry = {
+          count: 1,
+          resetTime: now + windowMs,
+        };
+        store.set(key, entry);
+      } else {
+        entry.count++;
+      }
+
+      const remaining = Math.max(0, limit - entry.count);
+      const resetSeconds = Math.max(1, Math.ceil((entry.resetTime - now) / 1000));
+
+      res.setHeader('X-RateLimit-Limit', limit.toString());
+      res.setHeader('X-RateLimit-Remaining', remaining.toString());
+      res.setHeader('X-RateLimit-Reset', Math.ceil(entry.resetTime / 1000).toString());
+
+      if (entry.count > limit) {
+        res.setHeader('Retry-After', resetSeconds.toString());
+        res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: 'Too many requests. Please try again later.',
+        });
+        return;
+      }
+
+      next();
+    };
+  }
+
+  // Rate Limiter Configurations (overridable via environment variables)
+  const apiRateLimitPerMinute = parseInt(process.env.API_RATE_LIMIT_PER_MINUTE || '60', 10) || 60;
+  const analysisRateLimitPerMinute = parseInt(process.env.ANALYSIS_RATE_LIMIT_PER_MINUTE || '20', 10) || 20;
+
+  // General API Rate Limiter (60 req/min/IP by default; exempts /api/health)
+  const apiGeneralLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    limit: apiRateLimitPerMinute,
+    scope: 'api_general',
+    exemptPaths: ['/api/health'],
+  });
+  const apiLimiter = apiGeneralLimiter;
+
+  // Strict Rate Limiter for Heavy Computation (20 req/min/IP by default)
+  const heavyAnalysisLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    limit: analysisRateLimitPerMinute,
+    scope: 'api_heavy_analysis',
+  });
+
+  // Protect all /api/* routes with the general limiter (exempts /api/health)
+  app.use('/api', apiGeneralLimiter);
 
   const orchestrator = ApiOrchestrator.getInstance();
 
   // ----------------------------------------------------
   // API ROUTES
   // ----------------------------------------------------
+
+  // Direct Project ZIP Download Endpoint
+  app.get(['/download-project.zip', '/api/download-zip'], (req: Request, res: Response) => {
+    const zipPath = path.join(process.cwd(), 'public', 'mac-analiz-pro-project.zip');
+    res.download(zipPath, 'mac-analiz-pro-project.zip', (err) => {
+      if (err && !res.headersSent) {
+        res.status(500).json({ error: 'Failed to download zip file' });
+      }
+    });
+  });
 
   // 1. Health & Info
   app.get('/api/health', (req: Request, res: Response) => {
@@ -107,7 +288,7 @@ async function startServer() {
   });
 
   // 4. Match Analysis Pipeline
-  app.get('/api/match/:id/analysis', async (req: Request, res: Response) => {
+  app.get('/api/match/:id/analysis', heavyAnalysisLimiter, async (req: Request, res: Response) => {
     const matchId = req.params.id;
     const requestId = `req_${Date.now()}_${matchId}`;
 
@@ -145,7 +326,9 @@ async function startServer() {
       const consistency = canonicalEntityManager.runFinalConsistencyCheck(
         targetMatch,
         matchData.details.h2h,
-        verifiedOddsData
+        verifiedOddsData,
+        matchData.details.stats,
+        matchData.details.squadData
       );
 
       if (!consistency.analysisPermitted) {
@@ -185,6 +368,7 @@ async function startServer() {
         h2h: matchData.details.h2h,
         standing: matchData.details.standing,
         stats: matchData.details.stats,
+        squadData: matchData.details.squadData,
       });
 
       if (!analysis.h2h && matchData.details.h2h) {
@@ -210,7 +394,7 @@ async function startServer() {
   });
 
   // 5. AI Explanation Layer
-  app.post('/api/ai/explain', async (req: Request, res: Response) => {
+  app.post('/api/ai/explain', heavyAnalysisLimiter, async (req: Request, res: Response) => {
     const requestId = `req_${Date.now()}_ai`;
     try {
       const analysis = req.body.analysis;
@@ -327,6 +511,122 @@ async function startServer() {
     }
   });
 
+  // 6. Automated Prediction Ledger Settlement (P1-4)
+  // Evaluates pending predictions using verified final match results from orchestrator
+  app.post('/api/predictions/settle', apiLimiter, async (req: Request, res: Response) => {
+    const requestId = `settle_${Date.now()}`;
+    try {
+      const summary = await predictionSettlementService.settlePendingPredictions();
+      res.json({
+        success: true,
+        data: summary,
+        requestId,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SETTLEMENT_FAILED',
+          message: err.message || 'Tahmin sonuçlandırma işlemi sırasında bir hata oluştu.',
+          retryable: true,
+        },
+        requestId,
+      });
+    }
+  });
+
+  app.get('/api/predictions/settle', apiLimiter, async (req: Request, res: Response) => {
+    const requestId = `settle_status_${Date.now()}`;
+    try {
+      const summary = await predictionSettlementService.settlePendingPredictions();
+      res.json({
+        success: true,
+        data: summary,
+        requestId,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SETTLEMENT_STATUS_FAILED',
+          message: err.message || 'Tahmin sonuçlandırma durumu alınamadı.',
+          retryable: true,
+        },
+        requestId,
+      });
+    }
+  });
+
+  // 7. Closing Line Value (CLV) Calculation & Tracking (P2-2)
+  app.post('/api/predictions/clv/calculate', apiLimiter, async (req: Request, res: Response) => {
+    const requestId = `clv_${Date.now()}`;
+    const { predictionId, closingOdds, kickoffTimestamp, closingTimestamp } = req.body || {};
+
+    if (!predictionId || !closingOdds) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_CLV_PARAMS',
+          message: 'predictionId ve closingOdds parametreleri zorunludur.',
+          retryable: false,
+        },
+        requestId,
+      });
+      return;
+    }
+
+    try {
+      const allRecords = await predictionLedger.getAllRecords();
+      const record = allRecords.find((r) => r.predictionId === predictionId);
+
+      if (!record) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'PREDICTION_NOT_FOUND',
+            message: 'Belirtilen tahmin kaydı bulunamadı.',
+            retryable: false,
+          },
+          requestId,
+        });
+        return;
+      }
+
+      const clvRecord = ClvEngine.calculateClv({
+        predictionId: record.predictionId,
+        canonicalFixtureId: record.canonicalFixtureId,
+        market: record.market,
+        selection: record.selection,
+        predictionOdds: record.oddsMarketSnapshot?.current ?? 2.0,
+        closingOdds: Number(closingOdds),
+        predictionTimestamp: record.createdAt,
+        closingTimestamp: closingTimestamp || new Date().toISOString(),
+        kickoffTimestamp: kickoffTimestamp || record.matchStartTime,
+      });
+
+      const updated = await predictionLedger.updateRecordClv(predictionId, clvRecord);
+
+      res.json({
+        success: true,
+        data: {
+          record: updated,
+          clv: clvRecord,
+        },
+        requestId,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'CLV_CALCULATION_FAILED',
+          message: err.message || 'CLV hesaplaması sırasında bir hata oluştu.',
+          retryable: false,
+        },
+        requestId,
+      });
+    }
+  });
+
   // ----------------------------------------------------
   // VITE & STATIC SERVING
   // ----------------------------------------------------
@@ -344,9 +644,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`MAÇ ANALİZ PRO server running on port ${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('[Server Error]', err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('[Server Boot Error] Failed to start server:', err);
+  process.exit(1);
+});

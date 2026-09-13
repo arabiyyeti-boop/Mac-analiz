@@ -1,17 +1,18 @@
 // src/components/common/Header.tsx - Header with Branding & State Indicators
 import React from 'react';
-import { Activity, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Wifi, WifiOff, SlidersHorizontal } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
   isOnline: boolean;
   activeTabTitle: string;
+  onOpenSettings?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ isOnline, activeTabTitle }) => {
+export const Header: React.FC<HeaderProps> = ({ isOnline, activeTabTitle, onOpenSettings }) => {
   return (
     <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3">
-      <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <div className="max-w-5xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-white shadow-md shadow-emerald-950/40">
             <Activity className="w-5 h-5 text-white" />
@@ -54,6 +55,17 @@ export const Header: React.FC<HeaderProps> = ({ isOnline, activeTabTitle }) => {
           </div>
 
           <PWAInstallButton />
+
+          {onOpenSettings && (
+            <button
+              id="btn-header-settings"
+              onClick={onOpenSettings}
+              className="p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-600 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+              title="Ayarlar"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>

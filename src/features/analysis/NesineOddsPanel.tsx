@@ -28,11 +28,12 @@ export const NesineOddsPanel: React.FC<NesineOddsPanelProps> = ({ analysis }) =>
     setIsLoading(true);
     try {
       const modelProbs = {
-        home: analysis.models.dixonColes?.pHome || analysis.models.poisson?.pHome,
-        draw: analysis.models.dixonColes?.pDraw || analysis.models.poisson?.pDraw,
-        away: analysis.models.dixonColes?.pAway || analysis.models.poisson?.pAway,
-        over25: analysis.models.poisson?.pOver25,
-        btts: analysis.models.poisson?.pBtts,
+        home: analysis.ensemble.MS1 ?? (analysis.models.dixonColes?.pHome || analysis.models.poisson?.pHome),
+        draw: analysis.ensemble.X ?? (analysis.models.dixonColes?.pDraw || analysis.models.poisson?.pDraw),
+        away: analysis.ensemble.MS2 ?? (analysis.models.dixonColes?.pAway || analysis.models.poisson?.pAway),
+        over25: analysis.ensemble.OVER_25 ?? analysis.models.poisson?.pOver25,
+        under25: analysis.ensemble.UNDER_25 ?? (1 - (analysis.models.poisson?.pOver25 || 0.5)),
+        btts: analysis.ensemble.BTTS_YES ?? analysis.models.poisson?.pBtts,
       };
 
       const res = await AppApiService.getNesineOdds(
@@ -296,13 +297,18 @@ export const NesineOddsPanel: React.FC<NesineOddsPanelProps> = ({ analysis }) =>
             </div>
           )}
 
-          {/* Probability Edge / Mathematical Value */}
+          {/* Probability Edge / Mathematical Value & Expected Value (EV) */}
           {oddsData.edges && oddsData.edges.length > 0 && (
             <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
-              <h4 className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>İstatistiksel Olasılık Avantajı (Model vs Nesine Fair Prob)</span>
-              </h4>
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-extrabold text-white flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Matematiksel Değer & Beklenen Getiri (+EV) Analizi</span>
+                </h4>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  EV = (Model P &times; Oran) - 1
+                </span>
+              </div>
 
               <div className="space-y-2">
                 {oddsData.edges.map((edge) => (
@@ -310,30 +316,51 @@ export const NesineOddsPanel: React.FC<NesineOddsPanelProps> = ({ analysis }) =>
                     key={edge.selection}
                     className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                       edge.hasValue
-                        ? 'bg-emerald-950/20 border-emerald-700/50'
+                        ? 'bg-emerald-950/25 border-emerald-700/60'
                         : 'bg-slate-950/60 border-slate-800'
                     }`}
                   >
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-bold text-white">{edge.selection}</span>
                         <span className="text-[11px] font-mono text-amber-400 font-bold">
                           {edge.bookmakerOdd.toFixed(2)} Oran
                         </span>
+                        {/* Positive EV Badge - strictly shown only when EV > 0 */}
+                        {edge.isPositiveEv ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
+                            +EV %{(edge.ev * 100).toFixed(1)}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
+                            EV %{(edge.ev * 100).toFixed(1)}
+                          </span>
+                        )}
+                        {/* Value Edge Badge */}
                         {edge.hasValue && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/40">
                             +{edge.edgePercentage}% Avantaj
                           </span>
                         )}
+                        {/* Fractional Kelly Badge (only when EV > 0) */}
+                        {edge.isPositiveEv && edge.halfKellyFraction && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono">
+                            Kelly: %{(edge.halfKellyFraction * 100).toFixed(1)} (Risk Korumalı)
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        Model Olasılığı: %{(edge.modelProbability * 100).toFixed(1)} &bull; Nesine Fair Prob: %{(edge.fairImpliedProbability * 100).toFixed(1)}
+                      <div className="text-[11px] text-slate-400 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span>Model Olasılığı: <strong className="text-slate-200 font-mono">%{(edge.modelProbability * 100).toFixed(1)}</strong></span>
+                        <span className="text-slate-600">&bull;</span>
+                        <span>Nesine De-vigged: <strong className="text-slate-300 font-mono">%{(edge.fairImpliedProbability * 100).toFixed(1)}</strong></span>
+                        <span className="text-slate-600">&bull;</span>
+                        <span>Ham Olasılık: <span className="text-slate-400 font-mono">%{(edge.rawImpliedProbability * 100).toFixed(1)}</span></span>
                       </div>
                     </div>
 
                     <div className="text-right sm:shrink-0">
-                      <span className="text-[10px] font-mono text-slate-400 block">Güven Katsayısı</span>
-                      <span className="text-xs font-black font-mono text-slate-200">
+                      <span className="text-[10px] font-mono text-slate-400 block">Matematiksel Skor</span>
+                      <span className={`text-xs font-black font-mono ${edge.hasValue ? 'text-emerald-400' : 'text-slate-300'}`}>
                         {edge.confidenceScore}/100
                       </span>
                     </div>
@@ -341,8 +368,8 @@ export const NesineOddsPanel: React.FC<NesineOddsPanelProps> = ({ analysis }) =>
                 ))}
               </div>
 
-              <div className="text-[10px] text-slate-500 italic">
-                * Oran avantajı (edge), model tahmininin piyasa beklentisine kıyasla istatistiksel farkını ifade eder. Varyans ve maç dinamikleri sebebiyle hiçbir seçim kesin kazanç vadetmez.
+              <div className="text-[10px] text-slate-400/90 leading-relaxed italic bg-slate-950/40 p-2 rounded-lg border border-slate-800/60">
+                * Yalnızca Beklenen Değeri pozitif (EV &gt; 0) olan marketler matematiksel değer sunar. Negatif veya nötr EV'li sonuçlar değer (value) taşımaz. Kelly kriteri risk tavanı koruması ile sunulmuştur.
               </div>
             </div>
           )}

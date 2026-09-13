@@ -1,8 +1,9 @@
 // src/features/matches/MatchesView.tsx - Fixtures & Match Selector
 import React, { useState } from 'react';
 import { Search, Calendar as CalendarIcon, Star, ChevronRight, Clock, Shield, Tag } from 'lucide-react';
-import { CanonicalMatch } from '@/types';
+import { CanonicalMatch, ProviderHealth } from '@/types';
 import { TeamLogo } from '@/components/TeamLogo';
+import { ProviderDiagnosticStatus } from '@/components/ProviderDiagnosticStatus';
 
 interface MatchesViewProps {
   matches: CanonicalMatch[];
@@ -12,6 +13,9 @@ interface MatchesViewProps {
   favorites: string[];
   onToggleFavorite: (matchId: string) => void;
   isLoading: boolean;
+  fetchError?: string | null;
+  providerHealth?: ProviderHealth[];
+  onRetry?: () => void;
 }
 
 export const MatchesView: React.FC<MatchesViewProps> = ({
@@ -22,6 +26,9 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
   favorites,
   onToggleFavorite,
   isLoading,
+  fetchError,
+  providerHealth,
+  onRetry,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLeague, setSelectedLeague] = useState<string>('ALL');
@@ -126,13 +133,27 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
           <p className="text-xs text-slate-400">Maç bülteni alınıyor ve doğrulanıyor...</p>
         </div>
       ) : filteredMatches.length === 0 ? (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center">
-          <Shield className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-          <h3 className="text-sm font-bold text-white">Maç Bulunamadı</h3>
-          <p className="text-xs text-slate-400 mt-1">
-            Seçili tarih veya arama kriterine uygun futbol maçı bulunmuyor.
-          </p>
-        </div>
+        fetchError ? (
+          <ProviderDiagnosticStatus
+            fetchError={fetchError}
+            providerHealth={providerHealth}
+            onRetry={onRetry}
+          />
+        ) : (
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center shadow-xs">
+            <Shield className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+            <h3 className="text-sm font-bold text-white">Maç Bulunamadı</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              {searchQuery
+                ? `"${searchQuery}" için eşleşen karşılaşma bulunamadı.`
+                : 'Seçili tarih veya lig kriterine uygun maç bulunmuyor.'}
+            </p>
+            <ProviderDiagnosticStatus
+              providerHealth={providerHealth}
+              compact={false}
+            />
+          </div>
+        )
       ) : (
         <div className="space-y-3">
           {filteredMatches.map((match) => {

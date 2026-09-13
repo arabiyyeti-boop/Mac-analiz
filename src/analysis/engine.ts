@@ -7,6 +7,7 @@ import {
   CanonicalStanding,
   CanonicalStats,
   CanonicalOdds,
+  CanonicalMatchSquadData,
   DataProvenance,
 } from '@/types';
 import { calculatePoisson } from './poisson';
@@ -24,6 +25,10 @@ import { CalibrationEngine } from './calibration';
 import { SignalEngine } from './signal';
 import { DataValidator } from '@/api/validation/DataValidator';
 import { CanonicalEntityManager } from '@/entity/CanonicalEntityManager';
+import { TeamStrengthEngine } from './teamStrength';
+import { OpponentAdjustedFormEngine } from './opponentAdjustedForm';
+import { AdvancedXGEngine } from './advancedXG';
+import { SquadImpactEngine } from './squadImpact';
 import {
   ANALYSIS_VERSION,
   MODEL_VERSION,
@@ -40,6 +45,7 @@ export interface AnalysisInputData {
   standing?: { home?: CanonicalStanding; away?: CanonicalStanding };
   stats?: CanonicalStats;
   odds?: CanonicalOdds;
+  squadData?: CanonicalMatchSquadData;
   provenance?: DataProvenance;
   sourceConflictWarning?: string;
 }
@@ -65,10 +71,15 @@ export class MatchAnalysisEngine {
     const dataQuality = DataValidator.computeDataQuality({
       match,
       h2h: verifiedH2h,
+      homeForm,
+      awayForm,
       homeFormCount,
       awayFormCount,
       hasStats: Boolean(stats),
-      hasXg: Boolean(stats?.xG),
+      hasXg: Boolean((stats?.homeXG !== undefined && stats?.awayXG !== undefined) || stats?.isRealXG),
+      hasInjuries: Boolean(stats?.topScorers?.length),
+      odds,
+      standing,
       providerHealthScore: 10,
     });
 
@@ -121,11 +132,63 @@ export class MatchAnalysisEngine {
       awayConcededAtAway: lambdaHome * 1.1,
     });
 
-    // xG (if present)
-    const xg = calculateXGModel(stats?.xG, stats?.xG ? stats.xG * 0.8 : undefined);
+    // xG (ONLY if real verified xG for both home and away is present in stats)
+    const xg = (stats?.homeXG !== undefined && stats?.awayXG !== undefined)
+      ? calculateXGModel(stats.homeXG, stats.awayXG)
+      : calculateXGModel(undefined, undefined);
 
-    // Market Odds (if present)
-    const oddsModel = calculateOddsModel(odds, poisson.pHome, poisson.pAway);
+    // Market Odds (if present) - raw implied probabilities for ensemble input
+    const initialOddsModel = calculateOddsModel(odds);
+
+    // 4.5. Dynamic Team Strength Evaluation (Feature Layer)
+    const teamStrength = TeamStrengthEngine.evaluateMatch({
+      match,
+      homeStanding: standing?.home,
+      awayStanding: standing?.away,
+      homeForm,
+      awayForm,
+      dataQuality,
+      leagueBaselineAvgGoals: leagueModel.avgGoals,
+    });
+
+    // 4.6. Opponent-Adjusted Form v2.0 Evaluation (Feature Layer)
+    const opponentAdjustedForm = OpponentAdjustedFormEngine.evaluateMatch({
+      match,
+      homeTeamStrength: teamStrength.home,
+      awayTeamStrength: teamStrength.away,
+      homeStanding: standing?.home,
+      awayStanding: standing?.away,
+      homeForm,
+      awayForm,
+      dataQuality,
+      leagueBaselineAvgGoals: leagueModel.avgGoals,
+    });
+
+    // 4.7. Advanced xG v2.0 Evaluation (Feature Layer)
+    const advancedXG = AdvancedXGEngine.evaluateMatch({
+      match,
+      stats,
+      homeStanding: standing?.home,
+      awayStanding: standing?.away,
+      homeForm,
+      awayForm,
+      dataQuality,
+      modelExpectedGoals: {
+        home: lambdaHome,
+        away: lambdaAway,
+        sourceModel: 'Poisson (Bivariate PMF) & Dixon-Coles',
+      },
+    });
+
+    // 4.8. Squad & Player Impact v2.0 Evaluation (Feature Layer)
+    const squadImpact = SquadImpactEngine.evaluateMatch({
+      match,
+      squadData: input.squadData,
+      teamStrength,
+      opponentAdjustedForm,
+      advancedXG,
+      dataQuality,
+    });
 
     // 5. Ensemble Synthesizer
     const ensemble = synthesizeEnsemble({
@@ -136,8 +199,34 @@ export class MatchAnalysisEngine {
       homeAway,
       league: leagueModel,
       xg,
-      odds: oddsModel,
+      odds: initialOddsModel,
     });
+
+    // 5b. Post-Processing Probability Calibration Layer (P2-1)
+    // Coherent multiclass calibration for 1X2 outcomes ensuring sum(P) === 1.0
+    // Raw models are never touched. Zero circular dependency with odds.
+    const cal1X2 = CalibrationEngine.calibrate1X2({
+      pHome: ensemble.MS1,
+      pDraw: ensemble.X,
+      pAway: ensemble.MS2,
+    });
+
+    const calibratedEnsemble = {
+      ...ensemble,
+      MS1: cal1X2.calibrated.pHome,
+      X: cal1X2.calibrated.pDraw,
+      MS2: cal1X2.calibrated.pAway,
+    };
+
+    // 5c. Odds Value / Expected Value (EV) Hardening (P1-3)
+    // Evaluate Value Edge, Expected Value (EV), and Kelly Criterion using post-processed calibrated probabilities
+    // (Home, Draw, and Away evaluated on equal footing with zero circular dependency)
+    const oddsModel = calculateOddsModel(
+      odds,
+      calibratedEnsemble.MS1,
+      calibratedEnsemble.X,
+      calibratedEnsemble.MS2
+    );
 
     // 6. Model Agreement & Dispersion for each market
     const agreement: Record<string, any> = {
@@ -218,7 +307,9 @@ export class MatchAnalysisEngine {
     // 10. Signals & Hard Risk Filtering
     const sampleSize = Math.min(homeFormCount, awayFormCount);
     const { signals, primarySignal } = SignalEngine.evaluateAllMarkets({
-      ensemble,
+      ensemble: calibratedEnsemble,
+      rawEnsemble: ensemble,
+      calibrationInfo: cal1X2.info,
       dataQuality,
       agreement,
       anomalies,
@@ -231,6 +322,7 @@ export class MatchAnalysisEngine {
         strongForm: form.homeFormScore > 65 || form.awayFormScore > 65,
         xgFavorable: xg.available && Math.abs(xg.xgDiff || 0) > 0.4,
       },
+      oddsModel,
     });
 
     const provenance: DataProvenance = input.provenance || {
@@ -238,8 +330,8 @@ export class MatchAnalysisEngine {
       provider: match.provider,
       retrievedAt: new Date().toISOString(),
       effectiveAt: match.utcDate,
-      freshness: 'FRESH',
-      validationStatus: 'VALIDATED',
+      freshness: dataQuality.freshnessClass === 'STALE' ? 'STALE' : dataQuality.freshnessClass === 'AGING' ? 'RECENT' : 'FRESH',
+      validationStatus: dataQuality.status === 'INVALID' ? 'SEMANTIC_FAIL' : dataQuality.status === 'CONFLICTING' ? 'SOURCE_CONFLICT' : !dataQuality.isSufficientForAnalysis ? 'INSUFFICIENT' : 'VALIDATED',
     };
 
     return {
@@ -257,6 +349,10 @@ export class MatchAnalysisEngine {
         xg,
         odds: oddsModel,
       },
+      teamStrength,
+      opponentAdjustedForm,
+      advancedXG,
+      squadImpact,
       ensemble,
       agreement,
       uncertainty: {

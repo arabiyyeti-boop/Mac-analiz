@@ -1,29 +1,25 @@
-// src/components/layout/BottomNavigation.tsx - Mobile-First Navigation
+// src/components/layout/BottomNavigation.tsx - Simplified Maçkolik-Inspired Bottom Navigation
 import React from 'react';
-import { Home, Calendar, LineChart, Star, History, SlidersHorizontal } from 'lucide-react';
+import { Home, Star, Trophy, Search } from 'lucide-react';
 
-export type NavTab = 'dashboard' | 'matches' | 'analysis' | 'favorites' | 'ledger' | 'settings';
+export type NavTab = 'matches' | 'favorites' | 'leagues' | 'search' | 'settings';
 
 interface BottomNavigationProps {
   activeTab: NavTab;
   onTabChange: (tab: NavTab) => void;
   favoritesCount: number;
-  hasSelectedMatch: boolean;
 }
 
 export const BottomNavigation: React.FC<BottomNavigationProps> = ({
   activeTab,
   onTabChange,
   favoritesCount,
-  hasSelectedMatch,
 }) => {
   const tabs: Array<{ id: NavTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }> = [
-    { id: 'dashboard', label: 'Genel Bakış', icon: Home },
-    { id: 'matches', label: 'Bülten', icon: Calendar },
-    { id: 'analysis', label: 'Analiz', icon: LineChart },
+    { id: 'matches', label: 'Maçlar', icon: Home },
     { id: 'favorites', label: 'Favoriler', icon: Star, badge: favoritesCount > 0 ? favoritesCount : undefined },
-    { id: 'ledger', label: 'Ledger', icon: History },
-    { id: 'settings', label: 'Ayarlar', icon: SlidersHorizontal },
+    { id: 'leagues', label: 'Ligler', icon: Trophy },
+    { id: 'search', label: 'Ara', icon: Search },
   ];
 
   return (
@@ -38,7 +34,7 @@ export const BottomNavigation: React.FC<BottomNavigationProps> = ({
               key={tab.id}
               id={`nav-tab-${tab.id}`}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all relative ${
+              className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition-all min-h-[44px] min-w-[50px] relative ${
                 isActive
                   ? 'text-emerald-400 font-bold'
                   : 'text-slate-400 hover:text-slate-200 font-medium'
@@ -50,9 +46,6 @@ export const BottomNavigation: React.FC<BottomNavigationProps> = ({
                   <span className="absolute -top-1 -right-2 bg-amber-500 text-slate-950 text-[9px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center">
                     {tab.badge}
                   </span>
-                )}
-                {tab.id === 'analysis' && hasSelectedMatch && !isActive && (
-                  <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                 )}
               </div>
               <span className="text-[10px] mt-1 tracking-tight">{tab.label}</span>
